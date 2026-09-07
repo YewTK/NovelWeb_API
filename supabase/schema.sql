@@ -17,7 +17,11 @@ create table if not exists public.series (
   updated_at  timestamptz not null default now()
 );
 
+-- เพิ่มภายหลัง: คีย์จัดกลุ่มตอนของนิยายเรื่องเดียวกัน (รันซ้ำได้)
+alter table public.series add column if not exists key text not null default '';
+
 create index if not exists series_user_idx on public.series (user_id, created_at desc);
+create unique index if not exists series_user_key_idx on public.series (user_id, key) where key <> '';
 
 /* -------------------------------- chapters ------------------------------- */
 

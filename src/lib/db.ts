@@ -43,3 +43,8 @@ export async function listSeries(): Promise<Series[]> {
 export async function getSeries(id: string): Promise<Series | undefined> {
   return get<Series>(SE(id));
 }
+
+export async function getSeriesByKey(key: string): Promise<Series | undefined> {
+  const all = await listSeries();
+  return all.find((s) => s.key === key);
+}

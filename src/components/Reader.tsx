@@ -3,8 +3,15 @@
 import { useMemo } from "react";
 import { AlertCircle } from "lucide-react";
 import type { Chapter } from "@/lib/types";
-import type { ReaderPrefs } from "@/lib/store";
+import type { FontKey, ReaderPrefs } from "@/lib/store";
 import { cn } from "@/lib/utils";
+
+const FONT_CLASS: Record<FontKey, string> = {
+  sans: "font-sans",
+  serif: "font-serif",
+  loop: "font-loop",
+  modern: "font-modern",
+};
 
 export function Reader({
   chapter,
@@ -29,7 +36,7 @@ export function Reader({
         <h1
           className={cn(
             "text-balance text-[26px] font-semibold leading-tight tracking-tight sm:text-[32px]",
-            prefs.fontFamily === "serif" && "font-serif",
+            FONT_CLASS[prefs.fontFamily],
           )}
         >
           {chapter.translatedTitle || chapter.title}
@@ -58,13 +65,14 @@ export function Reader({
       <div
         className={cn(
           "prose-novel",
-          prefs.fontFamily === "serif" ? "font-serif" : "font-sans",
+          FONT_CLASS[prefs.fontFamily],
         )}
         style={{
           fontSize: `${prefs.fontSize}px`,
           lineHeight: prefs.lineHeight,
           color: "var(--reader-fg)",
           ["--para-gap" as string]: `${prefs.paragraphGap}em`,
+          ["--indent" as string]: `${prefs.indent}em`,
         }}
       >
         {chapter.paragraphs.map((p, i) => {

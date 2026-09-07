@@ -56,13 +56,31 @@ export function TypographySheet({
           />
         </Field>
 
-        <Field label="ฟอนต์">
+        <Field label="ฟอนต์" hint="แต่ละปุ่มแสดงด้วยฟอนต์จริงของตัวเอง">
           <Segmented<ReaderPrefs["fontFamily"]>
             value={reader.fontFamily}
             onChange={(v) => set("fontFamily", v)}
             options={[
-              { value: "sans", label: "ไม่มีหัว" },
-              { value: "serif", label: "มีหัว" },
+              {
+                value: "sans",
+                label: <span className="font-sans">ไม่มีหัว</span>,
+                title: "IBM Plex Sans Thai",
+              },
+              {
+                value: "loop",
+                label: <span className="font-loop">มีหัว</span>,
+                title: "Sarabun",
+              },
+              {
+                value: "serif",
+                label: <span className="font-serif">มีเชิง</span>,
+                title: "Noto Serif Thai",
+              },
+              {
+                value: "modern",
+                label: <span className="font-modern">โมเดิร์น</span>,
+                title: "Kanit",
+              },
             ]}
           />
         </Field>
@@ -94,6 +112,15 @@ export function TypographySheet({
           display={`${reader.paragraphGap.toFixed(2)}em`}
         />
         <Slider
+          label="เว้นวรรคหน้าย่อหน้า"
+          min={0}
+          max={5}
+          step={0.5}
+          value={reader.indent}
+          onChange={(v) => set("indent", v)}
+          display={reader.indent === 0 ? "ไม่เว้น" : `${reader.indent} ตัวอักษร`}
+        />
+        <Slider
           label="ความกว้างคอลัมน์"
           min={520}
           max={980}
@@ -120,12 +147,14 @@ export function GlossarySheet({
   open,
   onClose,
   glossary,
+  seriesName,
   onChange,
   onRetranslate,
 }: {
   open: boolean;
   onClose: () => void;
   glossary: GlossaryEntry[];
+  seriesName: string | null;
   onChange: (next: GlossaryEntry[]) => void;
   onRetranslate: () => void;
 }) {
@@ -151,13 +180,28 @@ export function GlossarySheet({
     <Sheet
       open={open}
       onClose={onClose}
-      title="คลังคำศัพท์ของตอนนี้"
-      description="ชื่อตัวละคร สถานที่ ท่าไม้ตาย — AI จะใช้คำเหล่านี้แบบเดิมทุกครั้ง แก้แล้วกดแปลใหม่ได้"
+      title="คลังคำศัพท์ของเรื่องนี้"
+      description="ใช้ร่วมกันทุกตอนของนิยายเรื่องเดียวกัน — ชื่อตัวละคร สถานที่ ท่าไม้ตาย จะถูกแปลเหมือนเดิมเสมอ"
     >
       <div className="space-y-3">
+        {seriesName ? (
+          <div className="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5">
+            <BookOpen size={15} className="shrink-0 text-[var(--accent)]" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13.5px] font-medium">
+                {seriesName}
+              </span>
+              <span className="text-[11.5px] text-[var(--fg-dim)]">
+                {glossary.length} คำที่ล็อกไว้ทั้งเรื่อง
+              </span>
+            </span>
+          </div>
+        ) : null}
+
         {glossary.length === 0 ? (
           <p className="rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] text-[var(--fg-dim)]">
             ยังไม่มีคำศัพท์ — ระบบจะดึงให้อัตโนมัติเมื่อเริ่มแปล
+            และจะสะสมเพิ่มขึ้นเรื่อย ๆ ทุกตอนที่แปล
           </p>
         ) : (
           glossary.map((g, i) => (
@@ -210,7 +254,7 @@ export function GlossarySheet({
               onRetranslate();
             }}
           >
-            <RefreshCw size={15} /> แปลใหม่ด้วยคำศัพท์ชุดนี้
+            <RefreshCw size={15} /> แปลตอนนี้ใหม่ด้วยคำศัพท์ชุดนี้
           </Button>
         ) : null}
       </div>

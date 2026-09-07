@@ -2,7 +2,8 @@
 
 import * as local from "./db";
 import { cloudConfigured, supabase } from "./supabase";
-import type { Chapter, Paragraph, GlossaryEntry } from "./types";
+import type { Chapter, Paragraph, GlossaryEntry, Series } from "./types";
+import type { SeriesRef } from "./series";
 
 export type CloudStatus =
   | "disabled"
@@ -268,4 +269,100 @@ export async function pushAllLocal(): Promise<number> {
     .from("chapters")
     .upsert(all.map((c) => chapterToRow(c, userId!)), { onConflict: "id" });
   return error ? 0 : all.length;
+}
+
+/* -------------------------------- series --------------------------------- */
+
+interface SeriesRow {
+  id: string;
+  key: string;
+  name: string;
+  glossary: GlossaryEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+function rowToSeries(r: SeriesRow): Series {
+  return {
+    id: r.id,
+    key: r.key ?? "",
+    name: r.name,
+    glossary: Array.isArray(r.glossary) ? r.glossary : [],
+    createdAt: new Date(r.created_at).getTime(),
+    updatedAt: new Date(r.updated_at).getTime(),
+  };
+}
+
+function seriesToRow(s: Series, owner: string) {
+  return {
+    id: s.id,
+    user_id: owner,
+    key: s.key,
+    name: s.name,
+    glossary: s.glossary,
+  };
+}
+
+/** Mirrors the cloud series list into the local cache (newest wins). */
+export async function pullSeries(): Promise<Series[]> {
+  const sb = supabase();
+  if (!sb || !userId) return local.listSeries();
+
+  const { data, error } = await sb
+    .from("series")
+    .select("*")
+    .order("updated_at", { ascending: false })
+    .limit(200);
+
+  if (error) return local.listSeries();
+
+  const remote = (data as SeriesRow[]).map(rowToSeries);
+  const cached = await local.listSeries();
+  const byId = new Map(cached.map((s) => [s.id, s]));
+
+  for (const r of remote) {
+    const existing = byId.get(r.id);
+    if (!existing || r.updatedAt > existing.updatedAt) {
+      byId.set(r.id, r);
+      await local.saveSeries(r);
+    }
+  }
+  return [...byId.values()];
+}
+
+async function pushSeries(series: Series): Promise<void> {
+  const sb = supabase();
+  if (!sb || !userId) return;
+  await sb.from("series").upsert(seriesToRow(series, userId), { onConflict: "id" });
+}
+
+/**
+ * Finds the novel this chapter belongs to, creating it on first sight.
+ * The returned glossary is the accumulated one for the whole novel.
+ */
+export async function ensureSeries(ref: SeriesRef): Promise<Series> {
+  const existing = await local.getSeriesByKey(ref.key);
+  if (existing) return existing;
+
+  const created: Series = {
+    id: crypto.randomUUID(),
+    key: ref.key,
+    name: ref.name,
+    glossary: [],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  };
+  await local.saveSeries(created);
+  void pushSeries(created);
+  return created;
+}
+
+export async function saveSeries(series: Series): Promise<void> {
+  const next = { ...series, updatedAt: Date.now() };
+  await local.saveSeries(next);
+  void pushSeries(next);
+}
+
+export async function getSeriesById(id: string): Promise<Series | undefined> {
+  return local.getSeries(id);
 }

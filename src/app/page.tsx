@@ -31,15 +31,26 @@ import { buildChunks, splitPastedText } from "@/lib/chunk";
 import { estimateJob, formatUsd, type Estimate } from "@/lib/cost";
 import {
   deleteChapter as repoDelete,
+  ensureSeries,
   getChapter,
+  getSeriesById,
   initCloud,
   listChapters,
   pullChapters,
+  pullSeries,
   saveChapter,
+  saveSeries,
 } from "@/lib/repo";
+import { deriveSeries } from "@/lib/series";
+import { cleanGlossary, mergeGlossary } from "@/lib/glossary";
 import { useSettings } from "@/lib/store";
 import { runGlossaryPass, runTranslation } from "@/lib/translator";
-import type { Chapter, ExtractResult, GlossaryEntry } from "@/lib/types";
+import type {
+  Chapter,
+  ExtractResult,
+  GlossaryEntry,
+  Series,
+} from "@/lib/types";
 import { cn, hostOf, normalizeUrl } from "@/lib/utils";
 
 type Phase = "idle" | "extracting" | "preparing" | "translating";
@@ -71,7 +82,11 @@ export default function Page() {
     null,
   );
 
+  const [series, setSeries] = useState<Series | null>(null);
+
   const chapterRef = useRef<Chapter | null>(null);
+  const seriesRef = useRef<Series | null>(null);
+  const glossaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const buffered = useRef(new Map<number, string>());
   const rafRef = useRef<number | null>(null);
@@ -88,6 +103,7 @@ export default function Page() {
       setLibrary(await listChapters());
       await initCloud();
       setLibrary(await pullChapters());
+      await pullSeries();
     })();
   }, []);
 
@@ -141,10 +157,26 @@ export default function Page() {
     }, 1800);
   }, []);
 
+  /** The glossary belongs to the novel, not the chapter - persist it there. */
+  const persistSeriesGlossary = useCallback(
+    async (glossary: GlossaryEntry[]) => {
+      const current = seriesRef.current;
+      if (!current) return;
+      const next = { ...current, glossary };
+      seriesRef.current = next;
+      setSeries(next);
+      await saveSeries(next);
+    },
+    [],
+  );
+
   /* ------------------------------- pipeline ------------------------------- */
 
   const translate = useCallback(
-    async (target: Chapter, opts: { skipDone?: boolean } = {}) => {
+    async (
+      target: Chapter,
+      opts: { skipDone?: boolean; skipGlossary?: boolean } = {},
+    ) => {
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -152,25 +184,31 @@ export default function Page() {
       setChapter(working);
       persist(working, true);
 
-      // 1. Glossary pass — locks character/place names before any prose is written.
-      if (working.glossary.length === 0) {
+      // 1. Glossary pass — locks names before any prose is written. It runs on
+      //    every new chapter so characters introduced later join the same
+      //    novel-wide glossary instead of being renamed each time.
+      if (!opts.skipGlossary) {
         setPhase("preparing");
         try {
+          const known = seriesRef.current?.glossary ?? working.glossary;
           const result = await runGlossaryPass({
             config,
             style,
             title: working.title,
             paragraphs: working.paragraphs.map((p) => p.source),
+            known,
             signal: controller.signal,
           });
           if (result) {
+            const merged = mergeGlossary(known, result.terms);
             working = {
               ...working,
-              glossary: result.terms,
+              glossary: merged,
               translatedTitle: result.title || working.translatedTitle,
             };
             setChapter(working);
             persist(working, true);
+            await persistSeriesGlossary(merged);
           }
         } catch (e) {
           setPhase("idle");
@@ -243,7 +281,7 @@ export default function Page() {
         push("แปลเสร็จแล้ว", "success");
       }
     },
-    [config, style, persist, push, schedule, flush],
+    [config, style, persist, push, schedule, flush, persistSeriesGlossary],
   );
 
   const start = useCallback(
@@ -295,6 +333,13 @@ export default function Page() {
         return;
       }
 
+      // Group this chapter with the rest of its novel and inherit its glossary.
+      const novel = await ensureSeries(
+        deriveSeries(source.title, source.url || null),
+      );
+      seriesRef.current = novel;
+      setSeries(novel);
+
       const draft: Chapter = {
         id: crypto.randomUUID(),
         createdAt: Date.now(),
@@ -310,12 +355,12 @@ export default function Page() {
           source: text,
           target: "",
         })),
-        glossary: [],
+        glossary: novel.glossary,
         status: "translating",
         progress: 0,
         model: config.model,
         targetLanguage: style.targetLanguage,
-        seriesId: "",
+        seriesId: novel.id,
       };
 
       // Long pages cost real money — show the bill before spending it.
@@ -344,6 +389,11 @@ export default function Page() {
   const openChapter = async (id: string) => {
     const found = await getChapter(id);
     if (found) {
+      const novel = found.seriesId
+        ? await getSeriesById(found.seriesId)
+        : undefined;
+      seriesRef.current = novel ?? null;
+      setSeries(novel ?? null);
       setChapter(found);
       setProgress(found.progress);
       window.scrollTo({ top: 0 });
@@ -358,6 +408,10 @@ export default function Page() {
 
   const setGlossary = (next: GlossaryEntry[]) => {
     setChapter((prev) => (prev ? { ...prev, glossary: next } : prev));
+    if (glossaryTimer.current) clearTimeout(glossaryTimer.current);
+    glossaryTimer.current = setTimeout(() => {
+      void persistSeriesGlossary(cleanGlossary(next));
+    }, 900);
   };
 
   const retranslate = () => {
@@ -367,13 +421,13 @@ export default function Page() {
       ...current,
       paragraphs: current.paragraphs.map((p) => ({ ...p, target: "" })),
     };
-    void translate(cleared);
+    void translate(cleared, { skipGlossary: true });
   };
 
   const fillGaps = () => {
     const current = chapterRef.current;
     if (!current) return;
-    void translate(current, { skipDone: true });
+    void translate(current, { skipDone: true, skipGlossary: true });
   };
 
   const plainText = (c: Chapter) =>
@@ -465,6 +519,7 @@ export default function Page() {
             showAccount,
             setShowAccount,
             chapter,
+            seriesName: series?.name ?? null,
             setGlossary,
             retranslate,
             library,
@@ -628,6 +683,7 @@ export default function Page() {
           showAccount,
           setShowAccount,
           chapter,
+          seriesName: series?.name ?? null,
           setGlossary,
           retranslate,
           library,
@@ -706,6 +762,7 @@ function Sheets(props: {
   showAccount: boolean;
   setShowAccount: (v: boolean) => void;
   chapter: Chapter | null;
+  seriesName: string | null;
   setGlossary: (g: GlossaryEntry[]) => void;
   retranslate: () => void;
   library: Chapter[];
@@ -724,6 +781,7 @@ function Sheets(props: {
       <GlossarySheet
         open={props.showGlossary}
         onClose={() => props.setShowGlossary(false)}
+        seriesName={props.seriesName}
         glossary={props.chapter?.glossary ?? []}
         onChange={props.setGlossary}
         onRetranslate={props.retranslate}

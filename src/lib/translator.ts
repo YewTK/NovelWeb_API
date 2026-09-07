@@ -71,6 +71,8 @@ export async function runGlossaryPass(opts: {
   style: StyleSettings;
   title: string;
   paragraphs: string[];
+  /** terms already locked for this novel, so the model only reports new ones */
+  known?: GlossaryEntry[];
   signal: AbortSignal;
 }): Promise<GlossaryResult | null> {
   let raw = "";
@@ -81,7 +83,7 @@ export async function runGlossaryPass(opts: {
       mode: "glossary",
       config: opts.config,
       style: opts.style,
-      glossary: [],
+      glossary: opts.known ?? [],
       title: opts.title,
       paragraphs: opts.paragraphs.slice(0, 60).map((text, id) => ({ id, text })),
     },

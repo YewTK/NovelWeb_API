@@ -6,14 +6,45 @@ import type { ProviderConfig, StyleSettings } from "./types";
 
 export type ThemeName = "dark" | "light" | "sepia";
 
+export type FontKey = "sans" | "serif" | "loop" | "modern";
+
 export interface ReaderPrefs {
   fontSize: number;
   lineHeight: number;
-  fontFamily: "serif" | "sans";
+  fontFamily: FontKey;
   paragraphGap: number;
+  /** first-line indent, in em — the Thai print convention */
+  indent: number;
   maxWidth: number;
   showSource: boolean;
 }
+
+const DEFAULT_CONFIG: ProviderConfig = {
+  provider: "anthropic",
+  apiKey: "",
+  model: "claude-opus-5",
+  baseUrl: "",
+};
+
+const DEFAULT_STYLE: StyleSettings = {
+  targetLanguage: "th",
+  tone: "literary",
+  pronoun: "auto",
+  keepHonorifics: true,
+  keepNamesRomanized: false,
+  customInstruction: "",
+  effort: "low",
+};
+
+const DEFAULT_READER: ReaderPrefs = {
+  fontSize: 19,
+  lineHeight: 1.95,
+  fontFamily: "sans",
+  paragraphGap: 1.15,
+  indent: 2,
+  maxWidth: 720,
+  showSource: false,
+};
 
 interface SettingsState {
   config: ProviderConfig;
@@ -31,29 +62,9 @@ interface SettingsState {
 export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
-      config: {
-        provider: "anthropic",
-        apiKey: "",
-        model: "claude-opus-5",
-        baseUrl: "",
-      },
-      style: {
-        targetLanguage: "th",
-        tone: "literary",
-        pronoun: "auto",
-        keepHonorifics: true,
-        keepNamesRomanized: false,
-        customInstruction: "",
-        effort: "low",
-      },
-      reader: {
-        fontSize: 19,
-        lineHeight: 1.95,
-        fontFamily: "sans",
-        paragraphGap: 1.15,
-        maxWidth: 720,
-        showSource: false,
-      },
+      config: DEFAULT_CONFIG,
+      style: DEFAULT_STYLE,
+      reader: DEFAULT_READER,
       theme: "dark",
       onboarded: false,
       setConfig: (patch) => set((s) => ({ config: { ...s.config, ...patch } })),
@@ -62,6 +73,19 @@ export const useSettings = create<SettingsState>()(
       setTheme: (theme) => set({ theme }),
       setOnboarded: (onboarded) => set({ onboarded }),
     }),
-    { name: "novelflow.settings", version: 1 },
+    {
+      name: "novelflow.settings",
+      version: 2,
+      /** Fills in fields added after a reader last saved their settings. */
+      migrate: (persisted) => {
+        const s = (persisted ?? {}) as Partial<SettingsState>;
+        return {
+          ...s,
+          config: { ...DEFAULT_CONFIG, ...(s.config ?? {}) },
+          style: { ...DEFAULT_STYLE, ...(s.style ?? {}) },
+          reader: { ...DEFAULT_READER, ...(s.reader ?? {}) },
+        } as SettingsState;
+      },
+    },
   ),
 );

@@ -40,7 +40,7 @@ export async function POST(req: Request) {
   const isGlossary = body.mode === "glossary";
 
   const system = isGlossary
-    ? buildGlossaryPrompt(body.style.targetLanguage)
+    ? buildGlossaryPrompt(body.style.targetLanguage, body.glossary ?? [])
     : buildSystemPrompt(body.style, body.glossary ?? []);
 
   const user = isGlossary

@@ -3,6 +3,8 @@
 @theme {
   --font-sans: "IBM Plex Sans Thai", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --font-serif: "Noto Serif Thai", ui-serif, Georgia, "Times New Roman", serif;
+  --font-loop: "Sarabun", "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  --font-modern: "Kanit", "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
 
   --color-ink-50: #f6f7fb;

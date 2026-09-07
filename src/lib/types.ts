@@ -69,7 +69,10 @@ export interface Chapter {
 
 export interface Series {
   id: string;
+  /** derived from the source site + novel slug; groups chapters of one novel */
+  key: string;
   name: string;
   glossary: GlossaryEntry[];
   createdAt: number;
+  updatedAt: number;
 }

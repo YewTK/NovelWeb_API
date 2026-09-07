@@ -98,14 +98,26 @@ export function buildUserMessage(opts: {
   return parts.join("\n\n");
 }
 
-export function buildGlossaryPrompt(targetLanguage: string): string {
+export function buildGlossaryPrompt(
+  targetLanguage: string,
+  existing: GlossaryEntry[] = [],
+): string {
   const target = LANG_NAME[targetLanguage] ?? targetLanguage;
+
+  const locked = existing.length
+    ? `\nTerms already locked for this novel from earlier chapters — reuse them silently and do NOT list them again:\n${existing
+        .map((g) => `- ${g.source} → ${g.target}`)
+        .join("\n")}\nOnly report terms that are missing from that list.\n`
+    : "";
+
   return `You are preparing a translation glossary for a web novel chapter that will be translated into ${target}.
+${locked}
 
 Read the excerpt and extract the recurring proper nouns that MUST stay consistent across the whole novel: character names, titles/ranks, place names, organisations, cultivation realms or power systems, unique skills, items and in-world jargon.
 
 Rules:
 - Only include terms that would look wrong if translated differently later. Skip ordinary words.
+- Never repeat a term that is already locked above.
 - At most 24 terms. Prefer the ones that appear more than once.
 - "target" is the recommended ${target} rendering.
 - "note" is at most 8 words and only when the term needs disambiguation (gender, whether it is a rank, etc). Otherwise use an empty string.
