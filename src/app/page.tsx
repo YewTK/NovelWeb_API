@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   BookMarked,
-  ChevronRight,
   Columns2,
   Copy,
   Download,
@@ -17,6 +16,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { Composer } from "@/components/Composer";
+import {
+  Bookshelf,
+  ShelfSheet,
+  buildShelves,
+  type Shelf,
+} from "@/components/Bookshelf";
 import { Reader } from "@/components/Reader";
 import { SettingsSheet } from "@/components/SettingsSheet";
 import {
@@ -36,6 +41,7 @@ import {
   getSeriesById,
   initCloud,
   listChapters,
+  listSeries,
   pullChapters,
   pullSeries,
   saveChapter,
@@ -51,7 +57,7 @@ import type {
   GlossaryEntry,
   Series,
 } from "@/lib/types";
-import { cn, hostOf, normalizeUrl } from "@/lib/utils";
+import { cn, normalizeUrl } from "@/lib/utils";
 
 type Phase = "idle" | "extracting" | "preparing" | "translating";
 
@@ -83,6 +89,9 @@ export default function Page() {
   );
 
   const [series, setSeries] = useState<Series | null>(null);
+  const [allSeries, setAllSeries] = useState<Series[]>([]);
+  const [openShelf, setOpenShelf] = useState<Shelf | null>(null);
+  const [glossarySeries, setGlossarySeries] = useState<Series | null>(null);
 
   const chapterRef = useRef<Chapter | null>(null);
   const seriesRef = useRef<Series | null>(null);
@@ -97,15 +106,22 @@ export default function Page() {
 
   /* ------------------------------- bootstrap ------------------------------ */
 
+  const refreshShelves = useCallback(async () => {
+    const [chapters, novels] = await Promise.all([listChapters(), listSeries()]);
+    setLibrary(chapters);
+    setAllSeries(novels);
+  }, []);
+
   useEffect(() => {
     setMounted(true);
     void (async () => {
-      setLibrary(await listChapters());
+      await refreshShelves();
       await initCloud();
-      setLibrary(await pullChapters());
+      await pullChapters();
       await pullSeries();
+      await refreshShelves();
     })();
-  }, []);
+  }, [refreshShelves]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -149,13 +165,13 @@ export default function Page() {
     chapterRef.current = next;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     if (immediate) {
-      void saveChapter(next, true).then(async () => setLibrary(await listChapters()));
+      void saveChapter(next, true).then(() => void refreshShelves());
       return;
     }
     saveTimer.current = setTimeout(() => {
       void saveChapter(chapterRef.current ?? next);
     }, 1800);
-  }, []);
+  }, [refreshShelves]);
 
   /** The glossary belongs to the novel, not the chapter - persist it there. */
   const persistSeriesGlossary = useCallback(
@@ -165,6 +181,10 @@ export default function Page() {
       const next = { ...current, glossary };
       seriesRef.current = next;
       setSeries(next);
+      setAllSeries((list) =>
+        list.map((n) => (n.id === next.id ? next : n)),
+      );
+      setGlossarySeries((g) => (g && g.id === next.id ? next : g));
       await saveSeries(next);
     },
     [],
@@ -339,6 +359,9 @@ export default function Page() {
       );
       seriesRef.current = novel;
       setSeries(novel);
+      setAllSeries((list) =>
+        list.some((n) => n.id === novel.id) ? list : [...list, novel],
+      );
 
       const draft: Chapter = {
         id: crypto.randomUUID(),
@@ -402,15 +425,45 @@ export default function Page() {
 
   const removeChapter = async (id: string) => {
     await repoDelete(id);
-    setLibrary(await listChapters());
+    await refreshShelves();
+    setOpenShelf((shelf) =>
+      shelf
+        ? { ...shelf, chapters: shelf.chapters.filter((c) => c.id !== id) }
+        : shelf,
+    );
     if (chapterRef.current?.id === id) setChapter(null);
   };
 
+  const openGlossaryFor = (novel: Series | null) => {
+    if (!novel) {
+      push("ตอนนี้ยังไม่ได้ผูกกับเรื่องไหน", "error");
+      return;
+    }
+    // Only one sheet at a time — stacked sheets would hide this one.
+    setOpenShelf(null);
+    setGlossarySeries(novel);
+    setShowGlossary(true);
+  };
+
+  /** Edits land on the novel, then cascade to whatever is on screen. */
   const setGlossary = (next: GlossaryEntry[]) => {
-    setChapter((prev) => (prev ? { ...prev, glossary: next } : prev));
+    const target = glossarySeries;
+    if (!target) return;
+    const updated = { ...target, glossary: next };
+
+    setGlossarySeries(updated);
+    setAllSeries((list) => list.map((n) => (n.id === target.id ? updated : n)));
+    if (seriesRef.current?.id === target.id) {
+      seriesRef.current = updated;
+      setSeries(updated);
+    }
+    setChapter((prev) =>
+      prev && prev.seriesId === target.id ? { ...prev, glossary: next } : prev,
+    );
+
     if (glossaryTimer.current) clearTimeout(glossaryTimer.current);
     glossaryTimer.current = setTimeout(() => {
-      void persistSeriesGlossary(cleanGlossary(next));
+      void saveSeries({ ...updated, glossary: cleanGlossary(next) });
     }, 900);
   };
 
@@ -456,6 +509,7 @@ export default function Page() {
   };
 
   const missing = chapter?.paragraphs.filter((p) => !p.target).length ?? 0;
+  const shelves = buildShelves(allSeries, library);
 
   /* --------------------------------- views -------------------------------- */
 
@@ -477,33 +531,8 @@ export default function Page() {
           onOpenSettings={() => setShowSettings(true)}
         />
 
-        {mounted && library.length > 0 ? (
-          <section className="mx-auto w-full max-w-[680px] px-5 pb-24">
-            <h2 className="mb-3 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-[var(--fg-dim)]">
-              <BookMarked size={13} /> อ่านต่อ
-            </h2>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {library.slice(0, 6).map((c) => (
-                <button
-                  key={c.id}
-                  onClick={() => openChapter(c.id)}
-                  className="group rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]/60 p-4 text-left backdrop-blur transition-all hover:border-[var(--fg-dim)] hover:bg-[var(--bg-elev)]"
-                >
-                  <span className="line-clamp-2 text-[13.5px] font-medium leading-snug">
-                    {c.translatedTitle || c.title}
-                  </span>
-                  <span className="mt-2 flex items-center gap-2 text-[11.5px] text-[var(--fg-dim)]">
-                    {c.sourceUrl ? <span>{hostOf(c.sourceUrl)}</span> : <span>ข้อความ</span>}
-                    <span>· {Math.round(c.progress * 100)}%</span>
-                    <ChevronRight
-                      size={13}
-                      className="ml-auto transition-transform group-hover:translate-x-0.5"
-                    />
-                  </span>
-                </button>
-              ))}
-            </div>
-          </section>
+        {mounted ? (
+          <Bookshelf shelves={shelves} onOpen={setOpenShelf} />
         ) : null}
 
         <Sheets
@@ -519,7 +548,7 @@ export default function Page() {
             showAccount,
             setShowAccount,
             chapter,
-            seriesName: series?.name ?? null,
+            glossarySeries,
             setGlossary,
             retranslate,
             library,
@@ -528,6 +557,13 @@ export default function Page() {
             setLibrary,
             push,
           }}
+        />
+        <ShelfSheet
+          shelf={openShelf}
+          onClose={() => setOpenShelf(null)}
+          onOpenChapter={openChapter}
+          onOpenGlossary={openGlossaryFor}
+          onDeleteChapter={removeChapter}
         />
         <CostGate
           pending={confirm}
@@ -600,7 +636,7 @@ export default function Page() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => setShowGlossary(true)}
+            onClick={() => openGlossaryFor(series)}
             aria-label="คลังคำศัพท์"
           >
             <Languages size={17} />
@@ -683,7 +719,7 @@ export default function Page() {
           showAccount,
           setShowAccount,
           chapter,
-          seriesName: series?.name ?? null,
+          glossarySeries,
           setGlossary,
           retranslate,
           library,
@@ -762,7 +798,7 @@ function Sheets(props: {
   showAccount: boolean;
   setShowAccount: (v: boolean) => void;
   chapter: Chapter | null;
-  seriesName: string | null;
+  glossarySeries: Series | null;
   setGlossary: (g: GlossaryEntry[]) => void;
   retranslate: () => void;
   library: Chapter[];
@@ -781,8 +817,8 @@ function Sheets(props: {
       <GlossarySheet
         open={props.showGlossary}
         onClose={() => props.setShowGlossary(false)}
-        seriesName={props.seriesName}
-        glossary={props.chapter?.glossary ?? []}
+        seriesName={props.glossarySeries?.name ?? null}
+        glossary={props.glossarySeries?.glossary ?? []}
         onChange={props.setGlossary}
         onRetranslate={props.retranslate}
       />

@@ -1,19 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { Check, ExternalLink, Eye, EyeOff, Sparkles } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  Check,
+  ExternalLink,
+  Eye,
+  EyeOff,
+  Loader2,
+  RefreshCw,
+  Search,
+  Sparkles,
+} from "lucide-react";
 import { PROVIDERS, TARGET_LANGUAGES, providerMeta } from "@/lib/models";
 import { useSettings } from "@/lib/store";
 import type { ProviderId, StyleSettings } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import {
-  Button,
-  Field,
-  Segmented,
-  Sheet,
-  Switch,
-  inputClass,
-} from "./ui";
+import { Button, Field, Segmented, Sheet, Switch, inputClass } from "./ui";
+
+interface RemoteModel {
+  id: string;
+  label: string;
+  note?: string;
+}
 
 export function SettingsSheet({
   open,
@@ -24,12 +32,50 @@ export function SettingsSheet({
 }) {
   const { config, style, setConfig, setStyle } = useSettings();
   const [showKey, setShowKey] = useState(false);
+  const [remote, setRemote] = useState<RemoteModel[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+
   const meta = providerMeta(config.provider);
+
+  // A fetched list belongs to one key + provider; drop it when either changes.
+  useEffect(() => {
+    setRemote([]);
+    setLoadError(null);
+    setQuery("");
+  }, [config.provider, config.apiKey, config.baseUrl]);
 
   const pickProvider = (id: ProviderId) => {
     const next = providerMeta(id);
     setConfig({ provider: id, model: next.models[0].id, apiKey: "" });
   };
+
+  const fetchModels = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const res = await fetch("/api/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ config }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? "ดึงรายชื่อโมเดลไม่สำเร็จ");
+      if (!json.models?.length) throw new Error("บัญชีนี้ยังไม่มีโมเดลให้ใช้");
+      setRemote(json.models as RemoteModel[]);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : "ดึงรายชื่อโมเดลไม่สำเร็จ");
+    }
+    setLoading(false);
+  };
+
+  const curatedIds = new Set(meta.models.map((m) => m.id));
+  const filtered = query.trim()
+    ? remote.filter((m) =>
+        `${m.id} ${m.label}`.toLowerCase().includes(query.trim().toLowerCase()),
+      )
+    : remote;
 
   return (
     <Sheet
@@ -115,58 +161,139 @@ export function SettingsSheet({
             </Field>
           )}
 
-          <Field label="โมเดล">
-            <div className="space-y-2">
-              {meta.models.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => setConfig({ model: m.id })}
-                  className={cn(
-                    "flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-all",
-                    config.model === m.id
-                      ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-                      : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
+          <Field
+            label="โมเดล"
+            hint={
+              remote.length > 0
+                ? `${remote.length} โมเดลที่คีย์นี้ใช้ได้จริง`
+                : "กดปุ่มด้านขวาเพื่อดูว่าคีย์ของคุณใช้โมเดลอะไรได้บ้าง"
+            }
+            action={
+              <button
+                onClick={fetchModels}
+                disabled={loading || !config.apiKey}
+                className="inline-flex items-center gap-1.5 text-[12px] text-[var(--accent)] transition-opacity hover:underline disabled:opacity-40"
+              >
+                {loading ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={12} />
+                )}
+                ดึงจากบัญชีของฉัน
+              </button>
+            }
+          >
+            {loadError ? (
+              <p className="mb-2 rounded-lg border border-red-500/25 bg-red-500/8 px-3 py-2 text-[12px] leading-relaxed text-red-400">
+                {loadError}
+              </p>
+            ) : null}
+
+            {remote.length > 0 ? (
+              <div className="space-y-2">
+                <div className="relative">
+                  <Search
+                    size={13}
+                    className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-dim)]"
+                  />
+                  <input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="ค้นหาโมเดล เช่น flash"
+                    spellCheck={false}
+                    className={cn(inputClass, "pl-8 text-[13px]")}
+                  />
+                </div>
+
+                <div className="max-h-[280px] space-y-1.5 overflow-y-auto overscroll-contain pr-0.5">
+                  {filtered.length === 0 ? (
+                    <p className="px-1 py-3 text-center text-[12.5px] text-[var(--fg-dim)]">
+                      ไม่พบโมเดลที่ตรงกับ “{query}”
+                    </p>
+                  ) : (
+                    filtered.map((m) => (
+                      <button
+                        key={m.id}
+                        onClick={() => setConfig({ model: m.id })}
+                        className={cn(
+                          "flex w-full items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all",
+                          config.model === m.id
+                            ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                            : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
+                        )}
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-medium">
+                            {m.label}
+                          </span>
+                          <span className="mt-0.5 block truncate font-mono text-[11px] text-[var(--fg-dim)]">
+                            {m.id}
+                          </span>
+                        </span>
+                        {curatedIds.has(m.id) ? (
+                          <span className="shrink-0 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10px] font-semibold text-[var(--accent)]">
+                            แนะนำ
+                          </span>
+                        ) : null}
+                      </button>
+                    ))
                   )}
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[13.5px] font-medium">
-                      {m.label}
-                    </span>
-                    <span className="mt-0.5 block text-[12px] leading-snug text-[var(--fg-dim)]">
-                      {m.hint}
-                    </span>
-                  </span>
-                  <span
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {meta.models.map((m) => (
+                  <button
+                    key={m.id}
+                    onClick={() => setConfig({ model: m.id })}
                     className={cn(
-                      "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                      m.tier === "flagship"
-                        ? "bg-[var(--flare-500,#ff8f3c)]/15 text-[#ffb057]"
-                        : m.tier === "balanced"
-                          ? "bg-[var(--accent-soft)] text-[var(--accent)]"
-                          : "bg-[var(--bg-elev-2)] text-[var(--fg-dim)]",
+                      "flex w-full items-center gap-3 rounded-xl border px-3.5 py-2.5 text-left transition-all",
+                      config.model === m.id
+                        ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                        : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
                     )}
                   >
-                    {m.tier === "flagship"
-                      ? "ดีสุด"
-                      : m.tier === "balanced"
-                        ? "สมดุล"
-                        : "เร็ว"}
-                  </span>
-                </button>
-              ))}
-            </div>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13.5px] font-medium">
+                        {m.label}
+                      </span>
+                      <span className="mt-0.5 block text-[12px] leading-snug text-[var(--fg-dim)]">
+                        {m.hint}
+                      </span>
+                    </span>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                        m.tier === "flagship"
+                          ? "bg-[#ff8f3c]/15 text-[#ffb057]"
+                          : m.tier === "balanced"
+                            ? "bg-[var(--accent-soft)] text-[var(--accent)]"
+                            : "bg-[var(--bg-elev-2)] text-[var(--fg-dim)]",
+                      )}
+                    >
+                      {m.tier === "flagship"
+                        ? "ดีสุด"
+                        : m.tier === "balanced"
+                          ? "สมดุล"
+                          : "เร็ว"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </Field>
 
-          {config.provider === "compatible" && (
-            <Field label="ชื่อโมเดลเอง" hint="พิมพ์ชื่อโมเดลตามที่ผู้ให้บริการกำหนด">
-              <input
-                value={config.model}
-                onChange={(e) => setConfig({ model: e.target.value.trim() })}
-                spellCheck={false}
-                className={cn(inputClass, "font-mono text-[13px]")}
-              />
-            </Field>
-          )}
+          <Field
+            label="โมเดลที่เลือกอยู่"
+            hint="พิมพ์ชื่อโมเดลเองได้ ถ้ารู้ชื่อที่ต้องการอยู่แล้ว"
+          >
+            <input
+              value={config.model}
+              onChange={(e) => setConfig({ model: e.target.value.trim() })}
+              spellCheck={false}
+              className={cn(inputClass, "font-mono text-[13px]")}
+            />
+          </Field>
         </section>
 
         <div className="h-px bg-[var(--line-soft)]" />

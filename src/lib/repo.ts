@@ -366,3 +366,13 @@ export async function saveSeries(series: Series): Promise<void> {
 export async function getSeriesById(id: string): Promise<Series | undefined> {
   return local.getSeries(id);
 }
+
+export async function listSeries(): Promise<Series[]> {
+  return local.listSeries();
+}
+
+export async function deleteSeries(id: string): Promise<void> {
+  await local.deleteSeries(id);
+  const sb = supabase();
+  if (sb && userId) await sb.from("series").delete().eq("id", id);
+}

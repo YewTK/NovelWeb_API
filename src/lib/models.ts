@@ -65,8 +65,24 @@ export const PROVIDERS: ProviderMeta[] = [
     keyPlaceholder: "AIza...",
     keyHelpUrl: "https://aistudio.google.com/app/apikey",
     models: [
-      { id: "gemini-2.5-pro", label: "Gemini 2.5 Pro", hint: "คุณภาพสูง", tier: "flagship" },
-      { id: "gemini-2.5-flash", label: "Gemini 2.5 Flash", hint: "เร็วมาก มีโควตาฟรี", tier: "fast" },
+      {
+        id: "gemini-2.5-flash",
+        label: "Gemini 2.5 Flash",
+        hint: "อยู่ในโควตาฟรี เร็ว เหมาะกับแปลนิยายยาว",
+        tier: "balanced",
+      },
+      {
+        id: "gemini-2.5-flash-lite",
+        label: "Gemini 2.5 Flash-Lite",
+        hint: "ฟรีและเบาที่สุด สำนวนสู้ Flash ไม่ได้",
+        tier: "fast",
+      },
+      {
+        id: "gemini-2.5-pro",
+        label: "Gemini 2.5 Pro",
+        hint: "คุณภาพสูงสุด โควตาฟรีน้อยมาก",
+        tier: "flagship",
+      },
     ],
   },
   {

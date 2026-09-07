@@ -48,3 +48,7 @@ export async function getSeriesByKey(key: string): Promise<Series | undefined> {
   const all = await listSeries();
   return all.find((s) => s.key === key);
 }
+
+export async function deleteSeries(id: string): Promise<void> {
+  await del(SE(id));
+}
