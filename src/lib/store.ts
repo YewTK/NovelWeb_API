@@ -8,6 +8,9 @@ export type ThemeName = "dark" | "light" | "sepia";
 
 export type FontKey = "sans" | "serif" | "loop" | "modern";
 
+/** Chapter order inside a shelf: first chapter on top, or newest on top. */
+export type ShelfOrder = "asc" | "desc";
+
 export interface ReaderPrefs {
   fontSize: number;
   lineHeight: number;
@@ -52,11 +55,16 @@ interface SettingsState {
   reader: ReaderPrefs;
   theme: ThemeName;
   onboarded: boolean;
+  shelfOrder: ShelfOrder;
+  /** Follow the source site's "next chapter" link automatically when one finishes. */
+  autoNext: boolean;
   setConfig: (patch: Partial<ProviderConfig>) => void;
   setStyle: (patch: Partial<StyleSettings>) => void;
   setReader: (patch: Partial<ReaderPrefs>) => void;
   setTheme: (theme: ThemeName) => void;
   setOnboarded: (v: boolean) => void;
+  setShelfOrder: (order: ShelfOrder) => void;
+  setAutoNext: (v: boolean) => void;
 }
 
 export const useSettings = create<SettingsState>()(
@@ -67,11 +75,15 @@ export const useSettings = create<SettingsState>()(
       reader: DEFAULT_READER,
       theme: "dark",
       onboarded: false,
+      shelfOrder: "asc",
+      autoNext: false,
       setConfig: (patch) => set((s) => ({ config: { ...s.config, ...patch } })),
       setStyle: (patch) => set((s) => ({ style: { ...s.style, ...patch } })),
       setReader: (patch) => set((s) => ({ reader: { ...s.reader, ...patch } })),
       setTheme: (theme) => set({ theme }),
       setOnboarded: (onboarded) => set({ onboarded }),
+      setShelfOrder: (shelfOrder) => set({ shelfOrder }),
+      setAutoNext: (autoNext) => set({ autoNext }),
     }),
     {
       name: "novelflow.settings",
@@ -92,6 +104,8 @@ export const useSettings = create<SettingsState>()(
           config: { ...DEFAULT_CONFIG, ...(s.config ?? {}) },
           style: { ...DEFAULT_STYLE, ...(s.style ?? {}) },
           reader,
+          shelfOrder: s.shelfOrder ?? "asc",
+          autoNext: s.autoNext ?? false,
         } as SettingsState;
       },
     },

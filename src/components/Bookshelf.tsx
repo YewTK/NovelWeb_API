@@ -5,12 +5,16 @@ import {
   BookOpen,
   ChevronRight,
   FolderInput,
+  ArrowDownNarrowWide,
+  ArrowUpNarrowWide,
   Languages,
+  ListPlus,
   Library,
   Trash2,
 } from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
 import { chapterLabel, chapterNumber } from "@/lib/series";
+import { useSettings } from "@/lib/store";
 import { cn, formatRelative } from "@/lib/utils";
 import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button, Sheet } from "./ui";
@@ -177,6 +181,7 @@ export function ShelfSheet({
   onOpenGlossary,
   onDeleteChapter,
   onMerge,
+  onQueueAll,
 }: {
   shelf: Shelf | null;
   /** every other shelf, offered as a destination when merging */
@@ -186,12 +191,20 @@ export function ShelfSheet({
   onOpenGlossary: (series: Series) => void;
   onDeleteChapter: (id: string) => void;
   onMerge: (shelf: Shelf, targetId: string) => void;
+  onQueueAll: (chapters: Chapter[]) => void;
 }) {
   const [merging, setMerging] = useState(false);
+  const { shelfOrder, setShelfOrder } = useSettings();
 
   if (!shelf) return null;
 
   const hasSeries = Boolean(shelf.series.id);
+  // buildShelves hands these over in reading order; flip for newest-first.
+  const ordered =
+    shelfOrder === "desc" ? [...shelf.chapters].reverse() : shelf.chapters;
+
+  // Anything not finished is worth offering as one batch.
+  const pending = shelf.chapters.filter((c) => c.status !== "done");
   const targets: ShelfOption[] = shelves
     .filter((s) => s.series.id && s.series.id !== shelf.series.id)
     .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
@@ -218,6 +231,23 @@ export function ShelfSheet({
           </Button>
         ) : null}
 
+        {pending.length > 0 ? (
+          <Button
+            variant="outline"
+            className="w-full justify-start"
+            onClick={() => {
+              onQueueAll(pending);
+              onClose();
+            }}
+          >
+            <ListPlus size={15} className="text-[var(--accent)]" />
+            <span className="flex-1 text-left">แปลตอนที่ยังไม่เสร็จทั้งหมด</span>
+            <span className="text-[12px] text-[var(--fg-dim)]">
+              {pending.length} ตอน
+            </span>
+          </Button>
+        ) : null}
+
         {targets.length > 0 ? (
           <Button
             variant="outline"
@@ -229,8 +259,25 @@ export function ShelfSheet({
           </Button>
         ) : null}
 
-        <div className="space-y-2 pt-1">
-          {shelf.chapters.map((c) => (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <span className="text-[12px] font-semibold uppercase tracking-wider text-[var(--fg-dim)]">
+            รายตอน
+          </span>
+          <button
+            onClick={() => setShelfOrder(shelfOrder === "asc" ? "desc" : "asc")}
+            className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--fg-muted)] transition-colors hover:border-[var(--fg-dim)] hover:text-[var(--fg)]"
+          >
+            {shelfOrder === "asc" ? (
+              <ArrowUpNarrowWide size={13} />
+            ) : (
+              <ArrowDownNarrowWide size={13} />
+            )}
+            {shelfOrder === "asc" ? "ตอนแรกสุดก่อน" : "ตอนล่าสุดก่อน"}
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          {ordered.map((c) => (
             <div
               key={c.id}
               className="group flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 transition-all hover:border-[var(--fg-dim)]"

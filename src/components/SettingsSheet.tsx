@@ -30,7 +30,8 @@ export function SettingsSheet({
   open: boolean;
   onClose: () => void;
 }) {
-  const { config, style, setConfig, setStyle } = useSettings();
+  const { config, style, setConfig, setStyle, autoNext, setAutoNext } =
+    useSettings();
   const [showKey, setShowKey] = useState(false);
   const [remote, setRemote] = useState<RemoteModel[]>([]);
   const [loading, setLoading] = useState(false);
@@ -362,6 +363,12 @@ export function SettingsSheet({
               onChange={(keepNamesRomanized) => setStyle({ keepNamesRomanized })}
               label="คงชื่อเฉพาะเป็นอักษรโรมัน"
               hint="ไม่ทับศัพท์ชื่อตัวละครและสถานที่"
+            />
+            <Switch
+              checked={autoNext}
+              onChange={setAutoNext}
+              label="ดึงตอนถัดไปอัตโนมัติ"
+              hint="แปลจบแล้วไปตอนถัดไปของเว็บต้นทางเองต่อเนื่อง — มีค่าใช้จ่าย API ตามจำนวนตอน หยุดสูงสุดที่ 50 ตอน"
             />
           </div>
 

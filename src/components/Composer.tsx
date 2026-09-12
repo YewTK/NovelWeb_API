@@ -6,6 +6,7 @@ import {
   ClipboardPaste,
   Languages,
   Library,
+  FileUp,
   Link2,
   Loader2,
   Settings2,
@@ -26,6 +27,7 @@ export function Composer({
   shelves,
   shelfId,
   onShelfChange,
+  onImportPdf,
 }: {
   busy: boolean;
   busyLabel: string;
@@ -35,6 +37,7 @@ export function Composer({
   /** empty string means the shelf is derived from the link */
   shelfId: string;
   onShelfChange: (id: string) => void;
+  onImportPdf: () => void;
 }) {
   const [value, setValue] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -150,7 +153,16 @@ export function Composer({
               onClick={pasteFromClipboard}
               className="shrink-0"
             >
-              <ClipboardPaste size={14} /> วางจากคลิปบอร์ด
+              <ClipboardPaste size={14} />
+              <span className="hidden sm:inline">วางจากคลิปบอร์ด</span>
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onImportPdf}
+              className="shrink-0"
+            >
+              <FileUp size={14} /> PDF
             </Button>
             <div className="flex-1" />
             <Button

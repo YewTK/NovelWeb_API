@@ -4,6 +4,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ArrowLeft,
   ArrowUpToLine,
+  ChevronLeft,
+  ChevronRight,
+  DownloadCloud,
   Columns2,
   Copy,
   Download,
@@ -184,6 +187,8 @@ function DockButton({
   tone = "quiet",
   badge,
   compact,
+  disabled,
+  iconAfter,
 }: {
   onClick: () => void;
   label: string;
@@ -192,22 +197,29 @@ function DockButton({
   badge?: number;
   /** hide the text label on phones, keeping only the icon */
   compact?: boolean;
+  disabled?: boolean;
+  /** put the icon after the label, for "forward" actions */
+  iconAfter?: boolean;
 }) {
+  const text = <span className={cn(compact && "hidden sm:inline")}>{label}</span>;
   return (
     <button
       onClick={onClick}
       aria-label={label}
+      disabled={disabled}
       className={cn(
         "flex h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-3",
         "text-[13px] font-medium transition-all duration-200 active:scale-[0.96]",
+        "disabled:pointer-events-none disabled:opacity-30",
         tone === "primary" &&
           "bg-[var(--accent)] px-4 text-[#0a0c14] shadow-[0_6px_20px_-8px_var(--accent)]",
         tone === "accent" && "bg-[var(--accent-soft)] text-[var(--accent)]",
         tone === "quiet" && "text-[var(--fg-muted)] hover:bg-[var(--bg-elev-2)]",
       )}
     >
-      {icon}
-      <span className={cn(compact && "hidden sm:inline")}>{label}</span>
+      {iconAfter ? null : icon}
+      {text}
+      {iconAfter ? icon : null}
       {badge ? (
         <span className="rounded-md bg-black/15 px-1.5 text-[11px] tabular-nums">
           {badge}
@@ -222,10 +234,12 @@ export function ReaderDock({
   progress,
   busy,
   missing,
-  hasNext,
   width,
+  hasPrev,
+  nextMode,
   onTools,
   onFillGaps,
+  onPrev,
   onNext,
   onCopy,
   onDownload,
@@ -235,10 +249,17 @@ export function ReaderDock({
   progress: number;
   busy: boolean;
   missing: number;
-  hasNext: boolean;
   width: number;
+  /** Whether an earlier chapter of this novel is already in the library. */
+  hasPrev: boolean;
+  /**
+   * "chapter" — the next one is already downloaded, just open it.
+   * "fetch"   — only the source site's link exists, so go and get it.
+   */
+  nextMode: "chapter" | "fetch" | "none";
   onTools: () => void;
   onFillGaps: () => void;
+  onPrev: () => void;
   onNext: () => void;
   onCopy: () => void;
   onDownload: () => void;
@@ -290,9 +311,17 @@ export function ReaderDock({
 
           <div className="flex items-center gap-1 p-2">
             <DockButton
+              onClick={onPrev}
+              label="ตอนก่อนหน้า"
+              icon={<ChevronLeft size={18} />}
+              disabled={!hasPrev}
+              compact
+            />
+            <DockButton
               onClick={onTools}
               label="เครื่องมือ"
               icon={<MoreHorizontal size={17} />}
+              compact
             />
 
             <div className="hidden items-center gap-1 sm:flex">
@@ -317,12 +346,19 @@ export function ReaderDock({
               />
             ) : null}
 
-            {!busy && hasNext ? (
+            {!busy && nextMode !== "none" ? (
               <DockButton
                 onClick={onNext}
-                label="ตอนถัดไป"
-                icon={<Sparkles size={15} />}
+                label={nextMode === "fetch" ? "ดึงตอนถัดไป" : "ตอนถัดไป"}
+                icon={
+                  nextMode === "fetch" ? (
+                    <DownloadCloud size={15} />
+                  ) : (
+                    <ChevronRight size={17} />
+                  )
+                }
                 tone="primary"
+                iconAfter={nextMode !== "fetch"}
               />
             ) : null}
           </div>

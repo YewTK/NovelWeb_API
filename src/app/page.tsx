@@ -11,6 +11,7 @@ import {
 } from "@/components/Bookshelf";
 import type { ShelfOption } from "@/components/ShelfPicker";
 import { AuthGate } from "@/components/AuthGate";
+import { PdfImport, type PdfImportResult } from "@/components/PdfImport";
 import { Reader } from "@/components/Reader";
 import {
   ReaderDock,
@@ -58,6 +59,15 @@ import { cn, normalizeUrl } from "@/lib/utils";
 
 type Phase = "idle" | "extracting" | "preparing" | "translating";
 
+/** Stops an auto-follow chain from quietly spending a whole API budget. */
+const AUTO_NEXT_LIMIT = 50;
+
+interface QueueItem {
+  id: string;
+  title: string;
+  opts?: { skipDone?: boolean; skipGlossary?: boolean };
+}
+
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
   extracting: "กำลังดึงเนื้อหา…",
@@ -66,7 +76,7 @@ const PHASE_LABEL: Record<Phase, string> = {
 };
 
 export default function Page() {
-  const { config, style, reader, theme, setReader } = useSettings();
+  const { config, style, reader, theme, setReader, autoNext } = useSettings();
   const { toasts, push } = useToasts();
   const cloud = useCloudState();
 
@@ -77,6 +87,9 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
   /** Identifies the running translation so the UI can report it from anywhere. */
   const [job, setJob] = useState<{ id: string; title: string } | null>(null);
+  /** Chapters waiting their turn; they are translated one at a time, in order. */
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [showPdf, setShowPdf] = useState(false);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showType, setShowType] = useState(false);
@@ -104,6 +117,11 @@ export default function Page() {
   const buffered = useRef(new Map<number, string>());
   const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const queueRef = useRef<QueueItem[]>([]);
+  const runningRef = useRef(false);
+  /** Breaks the translate -> start -> queue -> translate dependency cycle. */
+  const continueRef = useRef<((url: string, seriesId: string) => void) | null>(null);
+  const autoChainRef = useRef(0);
 
   chapterRef.current = chapter;
   const busy = phase !== "idle";
@@ -405,9 +423,63 @@ export default function Page() {
         push("หยุดแปลแล้ว");
       } else {
         push(`แปลเสร็จแล้ว — ${final.translatedTitle || final.title}`, "success");
+
+        // Walk on to the next chapter on the source site, if asked to.
+        if (autoNext && final.nextUrl) {
+          if (autoChainRef.current < AUTO_NEXT_LIMIT) {
+            autoChainRef.current += 1;
+            continueRef.current?.(final.nextUrl, final.seriesId);
+          } else {
+            push(
+              `ดึงตอนถัดไปอัตโนมัติครบ ${AUTO_NEXT_LIMIT} ตอนแล้ว หยุดไว้ก่อน`,
+              "info",
+            );
+          }
+        }
       }
     },
-    [config, style, persist, push, schedule, flush, persistSeriesGlossary],
+    [config, style, persist, push, schedule, flush, persistSeriesGlossary, autoNext],
+  );
+
+  /**
+   * Works through the queue one chapter at a time. Sequential on purpose: each
+   * chapter feeds new terms into the novel's glossary, and the next chapter
+   * should be translated knowing them.
+   */
+  const pump = useCallback(async () => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+
+    try {
+      while (queueRef.current.length) {
+        const next = queueRef.current[0];
+        queueRef.current = queueRef.current.slice(1);
+        setQueue([...queueRef.current]);
+
+        const target = await getChapter(next.id);
+        if (!target) continue;
+
+        const novel = target.seriesId
+          ? await getSeriesById(target.seriesId)
+          : undefined;
+        seriesRef.current = novel ?? null;
+        setSeries(novel ?? null);
+
+        await translate(target, next.opts);
+      }
+    } finally {
+      runningRef.current = false;
+    }
+  }, [translate]);
+
+  const enqueue = useCallback(
+    (items: QueueItem[]) => {
+      if (!items.length) return;
+      queueRef.current = [...queueRef.current, ...items];
+      setQueue([...queueRef.current]);
+      void pump();
+    },
+    [pump],
   );
 
   const start = useCallback(
@@ -507,15 +579,35 @@ export default function Page() {
         return;
       }
 
-      await translate(draft);
+      await saveChapter(draft, true);
+      await refreshShelves();
+      setPhase("idle");
+      enqueue([{ id: draft.id, title: draft.title }]);
     },
-    [config, style, push, translate, shelfId],
+    [config, style, push, shelfId, enqueue, refreshShelves],
   );
 
+  useEffect(() => {
+    continueRef.current = (url, seriesId) => void start(url, "url", seriesId);
+  }, [start]);
+
+  /** Stops the chapter in flight and drops whatever was still waiting. */
   const stop = () => {
+    autoChainRef.current = 0;
+    const waiting = queueRef.current.length;
+    queueRef.current = [];
+    setQueue([]);
     abortRef.current?.abort();
     abortRef.current = null;
     setPhase("idle");
+    if (waiting > 0) push(`ยกเลิกคิวที่เหลืออีก ${waiting} ตอนแล้ว`);
+  };
+
+  /** Saves a draft then puts it in line to be translated. */
+  const queueDraft = async (draft: Chapter) => {
+    await saveChapter(draft, true);
+    await refreshShelves();
+    enqueue([{ id: draft.id, title: draft.title }]);
   };
 
   const openChapter = async (id: string) => {
@@ -617,6 +709,54 @@ export default function Page() {
     URL.revokeObjectURL(a.href);
   };
 
+  /**
+   * Turns the chapters detected in a PDF into real draft chapters on a shelf,
+   * then queues every one of them.
+   */
+  const importPdf = async (result: PdfImportResult) => {
+    if (!config.apiKey) {
+      setShowSettings(true);
+      push("ใส่ API Key ก่อนเริ่มแปล", "error");
+      return;
+    }
+
+    const novel = result.seriesId
+      ? await getSeriesById(result.seriesId)
+      : undefined;
+    const shelf =
+      novel ?? (await ensureSeries(deriveSeries(result.bookName, null)));
+
+    seriesRef.current = shelf;
+    setSeries(shelf);
+
+    const now = Date.now();
+    const drafts: Chapter[] = result.chapters.map((c, i) => ({
+      id: crypto.randomUUID(),
+      // Keep the book's own order — these have no timestamps of their own.
+      createdAt: now + i,
+      updatedAt: now + i,
+      title: c.title,
+      translatedTitle: "",
+      sourceUrl: null,
+      siteName: result.bookName,
+      nextUrl: null,
+      prevUrl: null,
+      paragraphs: c.paragraphs.map((text, id) => ({ id, source: text, target: "" })),
+      glossary: shelf.glossary,
+      status: "draft",
+      progress: 0,
+      model: config.model,
+      targetLanguage: style.targetLanguage,
+      seriesId: shelf.id,
+    }));
+
+    for (const draft of drafts) await saveChapter(draft, true);
+    await refreshShelves();
+
+    enqueue(drafts.map((d) => ({ id: d.id, title: d.title })));
+    push(`เพิ่ม ${drafts.length} ตอนเข้าคิวแปลแล้ว`, "success");
+  };
+
   /** Folds one shelf into another — the repair for a novel that split in two. */
   const mergeShelf = async (from: Shelf, targetId: string) => {
     const merged = await mergeIntoSeries(
@@ -647,6 +787,23 @@ export default function Page() {
 
   const missing = chapter?.paragraphs.filter((p) => !p.target).length ?? 0;
   const shelves = buildShelves(allSeries, library);
+
+  // Neighbours within the same novel, in reading order, so the reader can walk
+  // a shelf the way a novel site lets you walk a table of contents.
+  const siblings = (() => {
+    if (!chapter) return { prev: null as Chapter | null, next: null as Chapter | null };
+    const list =
+      shelves.find((sh) => sh.series.id === chapter.seriesId)?.chapters ?? [];
+    const at = list.findIndex((c) => c.id === chapter.id);
+    if (at === -1) return { prev: null as Chapter | null, next: null as Chapter | null };
+    return { prev: list[at - 1] ?? null, next: list[at + 1] ?? null };
+  })();
+
+  const nextMode: "chapter" | "fetch" | "none" = siblings.next
+    ? "chapter"
+    : chapter?.nextUrl
+      ? "fetch"
+      : "none";
   const shelfOptions: ShelfOption[] = shelves
     .filter((s) => s.series.id)
     .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
@@ -698,16 +855,18 @@ export default function Page() {
           shelves={mounted ? shelfOptions : []}
           shelfId={shelfId}
           onShelfChange={setShelfId}
+          onImportPdf={() => setShowPdf(true)}
         />
 
-        {job ? (
+        {job || queue.length ? (
           <JobBanner
-            title={job.title}
+            title={job?.title ?? "กำลังเตรียมคิว…"}
             label={`${PHASE_LABEL[phase] || "กำลังทำงาน"}${
               phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
             }`}
             progress={phase === "translating" ? progress : 0}
-            onOpen={() => void openChapter(job.id)}
+            waiting={queue.length}
+            onOpen={job ? () => void openChapter(job.id) : undefined}
             onStop={stop}
           />
         ) : null}
@@ -740,6 +899,13 @@ export default function Page() {
             onSignedOut: handleSignedOut,
           }}
         />
+        <PdfImport
+          open={showPdf}
+          onClose={() => setShowPdf(false)}
+          shelves={shelfOptions}
+          config={config}
+          onImport={(result) => void importPdf(result)}
+        />
         <ShelfSheet
           shelf={openShelf}
           shelves={shelves}
@@ -748,14 +914,25 @@ export default function Page() {
           onOpenGlossary={openGlossaryFor}
           onDeleteChapter={removeChapter}
           onMerge={(from, targetId) => void mergeShelf(from, targetId)}
+          onQueueAll={(chapters) => {
+            enqueue(
+              chapters.map((c) => ({
+                id: c.id,
+                title: c.translatedTitle || c.title,
+                // Already-translated paragraphs are kept; only gaps are filled.
+                opts: { skipDone: true },
+              })),
+            );
+            push(`เพิ่ม ${chapters.length} ตอนเข้าคิวแปลแล้ว`, "success");
+          }}
         />
         <CostGate
           pending={confirm}
           onCancel={() => setConfirm(null)}
           onConfirm={() => {
-            const job = confirm;
+            const pending = confirm;
             setConfirm(null);
-            if (job) void translate(job.draft);
+            if (pending) void queueDraft(pending.draft);
           }}
         />
         <ToastStack toasts={toasts} />
@@ -793,11 +970,21 @@ export default function Page() {
         progress={chrome.progress}
         busy={viewingJob}
         missing={missing}
-        hasNext={Boolean(chapter.nextUrl)}
         width={reader.maxWidth}
+        hasPrev={Boolean(siblings.prev)}
+        nextMode={nextMode}
         onTools={() => setShowTools(true)}
         onFillGaps={fillGaps}
-        onNext={() => start(chapter.nextUrl!, "url", chapter.seriesId)}
+        onPrev={() => {
+          if (siblings.prev) void openChapter(siblings.prev.id);
+        }}
+        onNext={() => {
+          if (siblings.next) void openChapter(siblings.next.id);
+          else if (chapter.nextUrl) {
+            autoChainRef.current = 0;
+            void start(chapter.nextUrl, "url", chapter.seriesId);
+          }
+        }}
         onCopy={copyAll}
         onDownload={download}
       />
@@ -844,9 +1031,9 @@ export default function Page() {
         pending={confirm}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
-          const job = confirm;
+          const pending = confirm;
           setConfirm(null);
-          if (job) void translate(job.draft);
+          if (pending) void queueDraft(pending.draft);
         }}
       />
       <ToastStack toasts={toasts} />
@@ -902,13 +1089,16 @@ function JobBanner({
   title,
   label,
   progress,
+  waiting,
   onOpen,
   onStop,
 }: {
   title: string;
   label: string;
   progress: number;
-  onOpen: () => void;
+  /** How many more chapters are lined up behind this one. */
+  waiting: number;
+  onOpen?: () => void;
   onStop: () => void;
 }) {
   return (
@@ -918,7 +1108,10 @@ function JobBanner({
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13.5px] font-medium">{title}</p>
-          <p className="mt-0.5 text-[12px] text-[var(--accent)]">{label}</p>
+          <p className="mt-0.5 text-[12px] text-[var(--accent)]">
+            {label}
+            {waiting > 0 ? ` · รออีก ${waiting} ตอน` : ""}
+          </p>
           <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--line)]">
             <div
               className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-500 ease-out"
@@ -927,9 +1120,11 @@ function JobBanner({
           </div>
         </div>
 
-        <Button variant="ghost" size="sm" onClick={onOpen} className="shrink-0">
-          เปิดอ่าน
-        </Button>
+        {onOpen ? (
+          <Button variant="ghost" size="sm" onClick={onOpen} className="shrink-0">
+            เปิดอ่าน
+          </Button>
+        ) : null}
         <Button variant="ghost" size="icon" onClick={onStop} aria-label="หยุดแปล">
           <StopCircle size={18} className="text-red-400" />
         </Button>
