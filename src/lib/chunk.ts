@@ -10,8 +10,11 @@ export interface Chunk {
   units: ChunkUnit[];
 }
 
-const TARGET_TOKENS = 1100;
-const HARD_MAX_UNITS = 40;
+// Bigger batches give the model more surrounding story per call and cut the
+// number of round trips; the system prompt is cached, so the only thing a
+// larger chunk costs is a slightly longer stream before the first paragraph.
+const TARGET_TOKENS = 1600;
+const HARD_MAX_UNITS = 30;
 
 /**
  * Groups paragraphs into batches small enough that the model reliably keeps
@@ -86,4 +89,37 @@ export function splitPastedText(text: string): { title: string; paragraphs: stri
     title: looksLikeTitle ? first : "ข้อความที่วางไว้",
     paragraphs: looksLikeTitle ? lines.slice(1) : lines,
   };
+}
+
+/**
+ * Text for the glossary pass, drawn evenly from the WHOLE chapter rather than
+ * just its opening. Characters and terms introduced in the back half were
+ * invisible to a head-only sample, so they got renamed mid-chapter.
+ */
+export function sampleChapter(paragraphs: string[], maxChars = 9000): string {
+  const GAP = "\n\n";
+  const joined = paragraphs.join(GAP);
+  if (joined.length <= maxChars) return joined;
+
+  // Weight the opening a little — that is where a chapter names its cast — then
+  // walk the rest at an even stride.
+  const head = paragraphs
+    .slice(0, 6)
+    .join(GAP)
+    .slice(0, Math.floor(maxChars * 0.35));
+
+  const remaining = paragraphs.slice(6);
+  const budget = maxChars - head.length;
+  if (budget <= 0 || !remaining.length) return head;
+
+  const picked: string[] = [];
+  let used = 0;
+  const stride = Math.max(1, Math.ceil(remaining.length / 40));
+  for (let i = 0; i < remaining.length && used < budget; i += stride) {
+    const text = remaining[i];
+    picked.push(text);
+    used += text.length + 2;
+  }
+
+  return `${head}${GAP}${picked.join(GAP)}`.slice(0, maxChars);
 }

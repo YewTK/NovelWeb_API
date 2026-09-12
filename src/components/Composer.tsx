@@ -58,6 +58,8 @@ export function Composer({
   const submit = () => {
     if (!ready || busy) return;
     onSubmit(trimmed, kind);
+    // The job runs in the background from here, so clear the box for the next one.
+    setValue("");
   };
 
   const pasteFromClipboard = async () => {

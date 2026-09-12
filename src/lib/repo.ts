@@ -5,10 +5,20 @@ import { cloudConfigured, supabase } from "./supabase";
 import type { Chapter, Paragraph, GlossaryEntry, Series } from "./types";
 import { nameKey, type SeriesRef } from "./series";
 import { mergeGlossary } from "./glossary";
+import {
+  LEGACY_OWNER,
+  currentUser,
+  onAuthChange,
+  signIn as authSignIn,
+  signOut as authSignOut,
+  signUp as authSignUp,
+  type AuthUser,
+} from "./auth";
 
 export type CloudStatus =
   | "disabled"
   | "connecting"
+  | "signedOut"
   | "ready"
   | "offline"
   | "error";
@@ -75,9 +85,12 @@ function chapterToRow(c: Chapter, userId: string) {
 
 /* ------------------------------- auth state ------------------------------ */
 
+export const ADOPT_FLAG = "novelflow.legacyAdopted";
+
 let status: CloudStatus = cloudConfigured ? "connecting" : "disabled";
+let user: AuthUser | null = null;
 let userId: string | null = null;
-let userEmail: string | null = null;
+let adoptedCount = 0;
 const listeners = new Set<() => void>();
 
 function emit() {
@@ -90,12 +103,63 @@ export function subscribeCloud(fn: () => void): () => void {
 }
 
 export function cloudSnapshot() {
-  return { status, userId, userEmail };
+  return { status, user, userId, username: user?.username ?? null };
+}
+
+/**
+ * How many chapters were inherited from the pre-login bookshelf. Read once by
+ * the UI so it can say so, then reset.
+ */
+export function consumeAdoptionNotice(): number {
+  const n = adoptedCount;
+  adoptedCount = 0;
+  return n;
+}
+
+/**
+ * Hands the bookshelf built before accounts existed to the owner named in
+ * LEGACY_OWNER, once per browser. Everything is merged in as-is — same ids,
+ * same shelves — then pushed up so other devices see it too.
+ */
+async function adoptLegacy(owner: AuthUser): Promise<void> {
+  if (owner.username !== LEGACY_OWNER) return;
+  try {
+    if (localStorage.getItem(ADOPT_FLAG)) return;
+  } catch {
+    return;
+  }
+
+  const { chapters, series } = await local.readLegacy();
+  if (chapters.length || series.length) {
+    for (const novel of series) await local.saveSeries(novel);
+    for (const chapter of chapters) await local.saveChapter(chapter);
+    await local.clearLegacy();
+    adoptedCount = chapters.length;
+  }
+
+  try {
+    localStorage.setItem(ADOPT_FLAG, "1");
+  } catch {
+    /* private mode — it will simply be attempted again next time */
+  }
+
+  if (chapters.length || series.length) await pushAllLocal();
+}
+
+/** Points the local cache at this reader and refreshes the cloud status. */
+async function applyUser(next: AuthUser | null): Promise<void> {
+  const changed = next?.id !== userId;
+  user = next;
+  userId = next?.id ?? null;
+  local.setScope(userId);
+  status = next ? "ready" : "signedOut";
+  emit();
+  if (next && changed) await adoptLegacy(next);
 }
 
 let initPromise: Promise<void> | null = null;
 
-/** Signs in anonymously so every device gets an RLS-protected identity with no signup friction. */
+/** Restores a saved session on boot; no session simply means "show the login". */
 export function initCloud(): Promise<void> {
   if (initPromise) return initPromise;
 
@@ -107,58 +171,42 @@ export function initCloud(): Promise<void> {
       return;
     }
 
-    sb.auth.onAuthStateChange((_event, session) => {
-      userId = session?.user?.id ?? null;
-      userEmail = session?.user?.email ?? null;
-      if (userId) status = "ready";
-      emit();
-    });
+    onAuthChange((next) => void applyUser(next));
 
     try {
-      const { data } = await sb.auth.getSession();
-      if (data.session) {
-        userId = data.session.user.id;
-        userEmail = data.session.user.email ?? null;
-        status = "ready";
-      } else {
-        const { data: anon, error } = await sb.auth.signInAnonymously();
-        if (error || !anon.user) {
-          // Anonymous sign-ins not enabled, or the device is offline.
-          status = navigator.onLine ? "error" : "offline";
-        } else {
-          userId = anon.user.id;
-          status = "ready";
-        }
-      }
+      await applyUser(await currentUser());
     } catch {
       status = navigator.onLine ? "error" : "offline";
+      emit();
     }
-    emit();
   })();
 
   return initPromise;
 }
 
-export async function linkEmail(email: string): Promise<void> {
-  const sb = supabase();
-  if (!sb) throw new Error("ยังไม่ได้ตั้งค่า Supabase");
-  const { error } = await sb.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: window.location.origin },
-  });
-  if (error) throw new Error(error.message);
+export async function signInCloud(
+  username: string,
+  password: string,
+): Promise<AuthUser> {
+  const next = await authSignIn(username, password);
+  await applyUser(next);
+  return next;
+}
+
+export async function signUpCloud(
+  username: string,
+  password: string,
+): Promise<AuthUser> {
+  const next = await authSignUp(username, password);
+  await applyUser(next);
+  return next;
 }
 
 export async function signOutCloud(): Promise<void> {
-  const sb = supabase();
-  if (!sb) return;
-  await sb.auth.signOut();
-  userId = null;
-  userEmail = null;
-  status = "connecting";
-  emit();
-  initPromise = null;
-  await initCloud();
+  for (const timer of pending.values()) clearTimeout(timer);
+  pending.clear();
+  await authSignOut();
+  await applyUser(null);
 }
 
 /* --------------------------------- reads --------------------------------- */
@@ -264,11 +312,21 @@ export async function deleteChapter(id: string): Promise<void> {
 export async function pushAllLocal(): Promise<number> {
   const sb = supabase();
   if (!sb || !userId) return 0;
+  const owner = userId;
+
+  // Shelves go first so the chapters that point at them never land orphaned.
+  const novels = await local.listSeries();
+  if (novels.length) {
+    await sb
+      .from("series")
+      .upsert(novels.map((n) => seriesToRow(n, owner)), { onConflict: "id" });
+  }
+
   const all = await local.listChapters();
   if (!all.length) return 0;
   const { error } = await sb
     .from("chapters")
-    .upsert(all.map((c) => chapterToRow(c, userId!)), { onConflict: "id" });
+    .upsert(all.map((c) => chapterToRow(c, owner)), { onConflict: "id" });
   return error ? 0 : all.length;
 }
 

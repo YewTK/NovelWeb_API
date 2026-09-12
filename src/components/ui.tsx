@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Info, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /* --------------------------------- Button -------------------------------- */
@@ -316,25 +316,46 @@ export function useToasts() {
   return { toasts, push };
 }
 
+const TOAST_STYLE: Record<Toast["tone"], { wrap: string; icon: ReactNode }> = {
+  success: {
+    wrap: "border-emerald-400/40 bg-emerald-500 text-white",
+    icon: <CheckCircle2 size={18} className="shrink-0" />,
+  },
+  error: {
+    wrap: "border-red-400/40 bg-red-500 text-white",
+    icon: <AlertTriangle size={18} className="shrink-0" />,
+  },
+  info: {
+    wrap: "border-[var(--line)] bg-[var(--bg-elev-2)] text-[var(--fg)]",
+    icon: <Info size={18} className="shrink-0 text-[var(--accent)]" />,
+  },
+};
+
+/**
+ * Solid, high-contrast and icon-led. The old translucent tints were nearly
+ * unreadable over prose, which is exactly where these appear.
+ */
 export function ToastStack({ toasts }: { toasts: Toast[] }) {
   return (
-    <div className="pointer-events-none fixed bottom-28 left-1/2 z-[60] flex w-[min(92vw,420px)] -translate-x-1/2 flex-col gap-2 sm:bottom-6">
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          role="status"
-          className={cn(
-            "rise pointer-events-auto rounded-2xl border px-4 py-3 text-[13px] leading-snug shadow-xl backdrop-blur-xl",
-            t.tone === "error"
-              ? "border-red-500/30 bg-red-500/12 text-red-300"
-              : t.tone === "success"
-                ? "border-emerald-500/30 bg-emerald-500/12 text-emerald-300"
-                : "border-[var(--line)] bg-[var(--bg-elev)]/90 text-[var(--fg)]",
-          )}
-        >
-          {t.message}
-        </div>
-      ))}
+    <div className="pointer-events-none fixed inset-x-0 bottom-[7.5rem] z-[60] mx-auto flex w-[min(92vw,440px)] flex-col gap-2 px-1 sm:bottom-6">
+      {toasts.map((t) => {
+        const style = TOAST_STYLE[t.tone];
+        return (
+          <div
+            key={t.id}
+            role="status"
+            aria-live="polite"
+            className={cn(
+              "rise pointer-events-auto flex items-center gap-2.5 rounded-2xl border px-4 py-3.5",
+              "text-[14px] font-medium leading-snug shadow-[0_12px_32px_-8px_rgba(0,0,0,.5)]",
+              style.wrap,
+            )}
+          >
+            {style.icon}
+            <span className="min-w-0 flex-1">{t.message}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

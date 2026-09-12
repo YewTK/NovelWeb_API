@@ -7,8 +7,9 @@ import {
   Cloud,
   CloudOff,
   Loader2,
-  Mail,
+  LogOut,
   Plus,
+  Search,
   RefreshCw,
   Trash2,
   X,
@@ -18,7 +19,6 @@ import { useSettings, type ReaderPrefs, type ThemeName } from "@/lib/store";
 import { cn, formatRelative, hostOf } from "@/lib/utils";
 import {
   cloudSnapshot,
-  linkEmail,
   pullChapters,
   pushAllLocal,
   signOutCloud,
@@ -103,13 +103,17 @@ export function TypographySheet({
           display={reader.lineHeight.toFixed(2)}
         />
         <Slider
-          label="ระยะห่างย่อหน้า"
-          min={0.6}
-          max={2.4}
+          label="ระยะห่างระหว่างย่อหน้า"
+          min={0}
+          max={4}
           step={0.05}
           value={reader.paragraphGap}
           onChange={(v) => set("paragraphGap", v)}
-          display={`${reader.paragraphGap.toFixed(2)}em`}
+          display={
+            reader.paragraphGap >= 1.8
+              ? `${reader.paragraphGap.toFixed(2)}em · เว้นบรรทัด`
+              : `${reader.paragraphGap.toFixed(2)}em`
+          }
         />
         <Slider
           label="เว้นวรรคหน้าย่อหน้า"
@@ -159,6 +163,20 @@ export function GlossarySheet({
   onRetranslate: () => void;
 }) {
   const [dirty, setDirty] = useState(false);
+  const [query, setQuery] = useState("");
+
+  // Rows keep the index they hold in the real glossary, so editing a filtered
+  // row still writes to the right entry.
+  const needle = query.trim().toLowerCase();
+  const rows = glossary
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) =>
+      needle
+        ? `${entry.source} ${entry.target} ${entry.note ?? ""}`
+            .toLowerCase()
+            .includes(needle)
+        : true,
+    );
 
   const update = (i: number, patch: Partial<GlossaryEntry>) => {
     const next = glossary.map((g, idx) => (idx === i ? { ...g, ...patch } : g));
@@ -173,6 +191,7 @@ export function GlossarySheet({
 
   const add = () => {
     onChange([...glossary, { source: "", target: "", note: "" }]);
+    setQuery("");
     setDirty(true);
   };
 
@@ -198,13 +217,48 @@ export function GlossarySheet({
           </div>
         ) : null}
 
+        {glossary.length > 0 ? (
+          <div className="relative">
+            <Search
+              size={15}
+              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-dim)]"
+            />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ค้นหาคำศัพท์ที่จะแก้ไข…"
+              spellCheck={false}
+              className="h-11 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-9 text-[13.5px] outline-none transition-colors placeholder:text-[var(--fg-dim)] focus:border-[var(--accent)]"
+            />
+            {query ? (
+              <button
+                onClick={() => setQuery("")}
+                aria-label="ล้างคำค้น"
+                className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-[var(--fg-dim)] transition-colors hover:bg-[var(--bg-elev-2)] hover:text-[var(--fg)]"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {needle ? (
+          <p className="px-1 text-[12px] text-[var(--fg-dim)]">
+            พบ {rows.length} จาก {glossary.length} คำ
+          </p>
+        ) : null}
+
         {glossary.length === 0 ? (
           <p className="rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] text-[var(--fg-dim)]">
             ยังไม่มีคำศัพท์ — ระบบจะดึงให้อัตโนมัติเมื่อเริ่มแปล
             และจะสะสมเพิ่มขึ้นเรื่อย ๆ ทุกตอนที่แปล
           </p>
+        ) : rows.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] text-[var(--fg-dim)]">
+            ไม่พบคำที่ตรงกับ “{query.trim()}”
+          </p>
         ) : (
-          glossary.map((g, i) => (
+          rows.map(({ entry: g, index: i }) => (
             <div
               key={i}
               className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5"
@@ -368,9 +422,10 @@ export function LibrarySheet({
 const STATUS_TEXT: Record<CloudStatus, string> = {
   disabled: "ไม่ได้เชื่อมคลาวด์ — เก็บในเครื่องอย่างเดียว",
   connecting: "กำลังเชื่อมต่อ…",
+  signedOut: "ยังไม่ได้เข้าสู่ระบบ",
   ready: "ซิงก์ขึ้นคลาวด์แล้ว",
   offline: "ออฟไลน์ — จะซิงก์ให้เมื่อกลับมาออนไลน์",
-  error: "เชื่อมต่อคลาวด์ไม่ได้ (ตรวจว่าเปิด Anonymous sign-ins แล้ว)",
+  error: "เชื่อมต่อคลาวด์ไม่ได้",
 };
 
 export function useCloudState() {
@@ -383,119 +438,78 @@ export function AccountSheet({
   open,
   onClose,
   onNotify,
+  onSignedOut,
 }: {
   open: boolean;
   onClose: () => void;
   onNotify: (message: string, tone?: "info" | "error" | "success") => void;
+  onSignedOut: () => void;
 }) {
-  const { status, userEmail } = useCloudState();
-  const [email, setEmail] = useState("");
-  const [sending, setSending] = useState(false);
-
-  const send = async () => {
-    if (!email.includes("@")) return;
-    setSending(true);
-    try {
-      await linkEmail(email.trim());
-      onNotify("ส่งลิงก์เข้าสู่ระบบไปที่อีเมลแล้ว", "success");
-    } catch (e) {
-      onNotify(e instanceof Error ? e.message : "ส่งอีเมลไม่สำเร็จ", "error");
-    }
-    setSending(false);
-  };
+  const { status, username } = useCloudState();
+  const [working, setWorking] = useState(false);
 
   return (
     <Sheet
       open={open}
       onClose={onClose}
-      title="บัญชีและการซิงก์"
-      description="งานแปลถูกเก็บในเครื่องเสมอ และซิงก์ขึ้น Supabase เพื่ออ่านต่อจากอุปกรณ์อื่น"
+      title="บัญชีของฉัน"
+      description="งานแปลของแต่ละบัญชีแยกกันคนละชั้น และซิงก์ขึ้นคลาวด์เพื่ออ่านต่อจากอุปกรณ์อื่น"
     >
       <div className="space-y-6">
-        <div
-          className={cn(
-            "flex items-start gap-3 rounded-xl border p-3.5",
-            status === "ready"
-              ? "border-emerald-500/25 bg-emerald-500/8"
-              : status === "error"
-                ? "border-red-500/25 bg-red-500/8"
-                : "border-[var(--line)] bg-[var(--bg)]",
-          )}
-        >
-          {status === "ready" ? (
-            <Cloud size={17} className="mt-0.5 shrink-0 text-emerald-400" />
-          ) : (
-            <CloudOff size={17} className="mt-0.5 shrink-0 text-[var(--fg-dim)]" />
-          )}
+        <div className="flex items-center gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-full bg-[var(--accent-soft)] text-[16px] font-semibold uppercase text-[var(--accent)]">
+            {username ? username.slice(0, 1) : "?"}
+          </span>
           <div className="min-w-0 flex-1">
-            <p className="text-[13.5px] font-medium">{STATUS_TEXT[status]}</p>
-            {userEmail ? (
-              <p className="mt-0.5 text-[12px] text-[var(--fg-dim)]">{userEmail}</p>
-            ) : status === "ready" ? (
-              <p className="mt-0.5 text-[12px] text-[var(--fg-dim)]">
-                กำลังใช้บัญชีชั่วคราวของอุปกรณ์นี้ — ผูกอีเมลเพื่อไม่ให้ข้อมูลหาย
-              </p>
-            ) : null}
+            <p className="truncate text-[15px] font-semibold">
+              {username ?? "ยังไม่ได้เข้าสู่ระบบ"}
+            </p>
+            <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-[var(--fg-dim)]">
+              {status === "ready" ? (
+                <Cloud size={12} className="text-emerald-400" />
+              ) : (
+                <CloudOff size={12} />
+              )}
+              {STATUS_TEXT[status]}
+            </p>
           </div>
         </div>
-
-        {!userEmail && status === "ready" ? (
-          <Field
-            label="ผูกอีเมล"
-            hint="เราจะส่งลิงก์เข้าสู่ระบบไปให้ ไม่ต้องตั้งรหัสผ่าน"
-          >
-            <div className="flex gap-2">
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@example.com"
-                className={inputClass}
-              />
-              <Button
-                variant="primary"
-                onClick={send}
-                disabled={sending || !email.includes("@")}
-                className="shrink-0"
-              >
-                {sending ? (
-                  <Loader2 size={15} className="animate-spin" />
-                ) : (
-                  <Mail size={15} />
-                )}
-              </Button>
-            </div>
-          </Field>
-        ) : null}
 
         <div className="space-y-2">
           <Button
             variant="outline"
             className="w-full"
+            disabled={status !== "ready" || working}
             onClick={async () => {
+              setWorking(true);
               const n = await pushAllLocal();
+              setWorking(false);
               onNotify(
                 n ? `อัปโหลดขึ้นคลาวด์แล้ว ${n} ตอน` : "ไม่มีอะไรต้องอัปโหลด",
                 "success",
               );
             }}
-            disabled={status !== "ready"}
           >
-            <Cloud size={15} /> อัปโหลดทุกตอนในเครื่องขึ้นคลาวด์
+            {working ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Cloud size={15} />
+            )}
+            อัปโหลดทุกตอนในเครื่องขึ้นคลาวด์
           </Button>
 
-          {userEmail ? (
-            <Button
-              variant="ghost"
-              className="w-full"
-              onClick={async () => {
-                await signOutCloud();
-                onNotify("ออกจากระบบแล้ว");
-              }}
-            >
-              ออกจากระบบ
-            </Button>
-          ) : null}
+          <Button
+            variant="ghost"
+            className="w-full"
+            onClick={async () => {
+              await signOutCloud();
+              onClose();
+              onSignedOut();
+              onNotify("ออกจากระบบแล้ว");
+            }}
+          >
+            <LogOut size={15} /> ออกจากระบบ
+          </Button>
         </div>
 
         <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">

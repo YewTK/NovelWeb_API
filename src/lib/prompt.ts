@@ -75,6 +75,12 @@ export function buildUserMessage(opts: {
   paragraphs: { id: number; text: string }[];
   previousSource?: string;
   previousTarget?: string;
+  /**
+   * Finished prose from earlier in this same chapter. Sections after the first
+   * are translated in parallel, so most of them never see the section directly
+   * before them — this is what keeps their voice from drifting apart.
+   */
+  styleSample?: string;
   title?: string;
 }): string {
   const parts: string[] = [];
@@ -83,9 +89,21 @@ export function buildUserMessage(opts: {
     parts.push(`Chapter title: ${opts.title}`);
   }
 
+  if (opts.styleSample) {
+    parts.push(
+      `Voice reference — prose already approved for this chapter. Match its register, rhythm, pronoun choices and naming. Do NOT translate or repeat it.\n<voice_reference>\n${opts.styleSample}\n</voice_reference>`,
+    );
+  }
+
   if (opts.previousSource && opts.previousTarget) {
     parts.push(
       `Context — the end of the previous section, for continuity of voice and terminology. Do NOT translate or repeat it.\n<previous_source>\n${opts.previousSource}\n</previous_source>\n<previous_translation>\n${opts.previousTarget}\n</previous_translation>`,
+    );
+  } else if (opts.previousSource) {
+    // The preceding section is still being translated; its source alone still
+    // tells the model what just happened in the story.
+    parts.push(
+      `Context — the source text immediately before this section, so you know what just happened. Do NOT translate or repeat it.\n<previous_source>\n${opts.previousSource}\n</previous_source>`,
     );
   }
 
@@ -113,12 +131,15 @@ export function buildGlossaryPrompt(
   return `You are preparing a translation glossary for a web novel chapter that will be translated into ${target}.
 ${locked}
 
-Read the excerpt and extract the recurring proper nouns that MUST stay consistent across the whole novel: character names, titles/ranks, place names, organisations, cultivation realms or power systems, unique skills, items and in-world jargon.
+The excerpt below is sampled across the ENTIRE chapter, beginning to end, so terms introduced late are just as important as the ones on the first page.
+
+Extract the recurring proper nouns that MUST stay consistent across the whole novel: character names, titles/ranks, place names, organisations, cultivation realms or power systems, unique skills, items and in-world jargon.
 
 Rules:
 - Only include terms that would look wrong if translated differently later. Skip ordinary words.
 - Never repeat a term that is already locked above.
-- At most 24 terms. Prefer the ones that appear more than once.
+- At most 32 terms. Prefer the ones that appear more than once.
+- Prefer a rendering that reads naturally to a ${target} novel reader over a literal transliteration, unless the term is a personal name.
 - "target" is the recommended ${target} rendering.
 - "note" is at most 8 words and only when the term needs disambiguation (gender, whether it is a rank, etc). Otherwise use an empty string.
 

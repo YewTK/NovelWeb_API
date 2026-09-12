@@ -40,7 +40,7 @@ const DEFAULT_READER: ReaderPrefs = {
   fontSize: 19,
   lineHeight: 1.95,
   fontFamily: "sans",
-  paragraphGap: 1.15,
+  paragraphGap: 1.9,
   indent: 2,
   maxWidth: 720,
   showSource: false,
@@ -75,15 +75,23 @@ export const useSettings = create<SettingsState>()(
     }),
     {
       name: "novelflow.settings",
-      version: 2,
+      version: 3,
       /** Fills in fields added after a reader last saved their settings. */
-      migrate: (persisted) => {
+      migrate: (persisted, version) => {
         const s = (persisted ?? {}) as Partial<SettingsState>;
+        const reader = { ...DEFAULT_READER, ...(s.reader ?? {}) };
+
+        // v3 widened paragraph spacing: anyone still sitting on the old cramped
+        // default gets the roomier one, while a deliberate choice is kept.
+        if (version < 3 && reader.paragraphGap <= 1.2) {
+          reader.paragraphGap = DEFAULT_READER.paragraphGap;
+        }
+
         return {
           ...s,
           config: { ...DEFAULT_CONFIG, ...(s.config ?? {}) },
           style: { ...DEFAULT_STYLE, ...(s.style ?? {}) },
-          reader: { ...DEFAULT_READER, ...(s.reader ?? {}) },
+          reader,
         } as SettingsState;
       },
     },

@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { BookMarked, Settings2, UserRound } from "lucide-react";
+import { BookMarked, Loader2, Settings2, StopCircle, UserRound } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import {
   Bookshelf,
@@ -10,6 +10,7 @@ import {
   type Shelf,
 } from "@/components/Bookshelf";
 import type { ShelfOption } from "@/components/ShelfPicker";
+import { AuthGate } from "@/components/AuthGate";
 import { Reader } from "@/components/Reader";
 import {
   ReaderDock,
@@ -35,6 +36,7 @@ import {
   getSeriesById,
   initCloud,
   listChapters,
+  consumeAdoptionNotice,
   listSeries,
   mergeIntoSeries,
   pullChapters,
@@ -73,6 +75,8 @@ export default function Page() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [mounted, setMounted] = useState(false);
+  /** Identifies the running translation so the UI can report it from anywhere. */
+  const [job, setJob] = useState<{ id: string; title: string } | null>(null);
 
   const [showSettings, setShowSettings] = useState(false);
   const [showType, setShowType] = useState(false);
@@ -92,16 +96,20 @@ export default function Page() {
   const [shelfId, setShelfId] = useState("");
 
   const chapterRef = useRef<Chapter | null>(null);
+  /** The chapter currently being translated — not necessarily the one on screen. */
+  const jobRef = useRef<Chapter | null>(null);
   const seriesRef = useRef<Series | null>(null);
   const glossaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const buffered = useRef(new Map<number, string>());
-  const rafRef = useRef<number | null>(null);
+  const flushTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   chapterRef.current = chapter;
   const busy = phase !== "idle";
-  const chrome = useReaderScroll(busy);
+  /** True only when the chapter on screen is the one being translated. */
+  const viewingJob = Boolean(chapter && job && chapter.id === job.id);
+  const chrome = useReaderScroll(viewingJob);
 
   /* ------------------------------- bootstrap ------------------------------ */
 
@@ -111,16 +119,27 @@ export default function Page() {
     setAllSeries(novels);
   }, []);
 
+  /** Pulls this reader's library down and shows what was inherited, if anything. */
+  const loadLibrary = useCallback(async () => {
+    await refreshShelves();
+    await pullChapters();
+    await pullSeries();
+    await refreshShelves();
+    const adopted = consumeAdoptionNotice();
+    if (adopted > 0) {
+      push(`ย้ายชั้นหนังสือเดิมเข้าบัญชีนี้แล้ว ${adopted} ตอน`, "success");
+    }
+  }, [refreshShelves, push]);
+
   useEffect(() => {
     setMounted(true);
     void (async () => {
-      await refreshShelves();
       await initCloud();
-      await pullChapters();
-      await pullSeries();
-      await refreshShelves();
+      await loadLibrary();
     })();
-  }, [refreshShelves]);
+    // loadLibrary is stable for the lifetime of the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -135,42 +154,120 @@ export default function Page() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [busy]);
 
+  /**
+   * Asks the device to stay awake while a chapter is being translated. A phone
+   * that sleeps suspends the page and stalls the stream; this keeps a job alive
+   * while the reader does something else. Browsers drop the lock whenever the
+   * tab is hidden, so it is taken again on every return to the foreground.
+   */
+  useEffect(() => {
+    if (!busy) return;
+
+    type Sentinel = { release: () => Promise<void> };
+    const api = (
+      navigator as unknown as {
+        wakeLock?: { request: (t: "screen") => Promise<Sentinel> };
+      }
+    ).wakeLock;
+    if (!api) return;
+
+    let sentinel: Sentinel | null = null;
+    let dropped = false;
+
+    const acquire = async () => {
+      if (dropped || document.visibilityState !== "visible") return;
+      try {
+        sentinel = await api.request("screen");
+      } catch {
+        /* denied, unsupported, or the tab lost focus mid-request */
+      }
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void acquire();
+    };
+
+    void acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      dropped = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      void sentinel?.release().catch(() => undefined);
+    };
+  }, [busy]);
+
+
   /* ---------------------------- streaming writes -------------------------- */
 
+  /**
+   * Folds buffered paragraphs into the job's chapter, and mirrors them onto the
+   * screen only when the reader happens to be looking at that same chapter.
+   */
   const flush = useCallback(() => {
-    rafRef.current = null;
+    if (flushTimer.current !== null) {
+      clearTimeout(flushTimer.current);
+      flushTimer.current = null;
+    }
     const updates = buffered.current;
     if (!updates.size) return;
     buffered.current = new Map();
-    setChapter((prev) =>
-      prev
-        ? {
-            ...prev,
-            paragraphs: prev.paragraphs.map((p) =>
-              updates.has(p.id) ? { ...p, target: updates.get(p.id)! } : p,
-            ),
-            updatedAt: Date.now(),
-          }
-        : prev,
-    );
+
+    const current = jobRef.current;
+    if (!current) return;
+
+    const next: Chapter = {
+      ...current,
+      paragraphs: current.paragraphs.map((p) =>
+        updates.has(p.id) ? { ...p, target: updates.get(p.id)! } : p,
+      ),
+      updatedAt: Date.now(),
+    };
+    jobRef.current = next;
+    setChapter((prev) => (prev && prev.id === next.id ? next : prev));
   }, []);
 
+  /**
+   * A timer rather than requestAnimationFrame: rAF stops firing entirely once
+   * the tab is hidden, which would strand every streamed paragraph in the
+   * buffer until the reader came back.
+   */
   const schedule = useCallback(() => {
-    if (rafRef.current !== null) return;
-    rafRef.current = requestAnimationFrame(flush);
+    if (flushTimer.current !== null) return;
+    flushTimer.current = setTimeout(flush, 90);
   }, [flush]);
 
   const persist = useCallback((next: Chapter, immediate = false) => {
-    chapterRef.current = next;
+    jobRef.current = next;
     if (saveTimer.current) clearTimeout(saveTimer.current);
     if (immediate) {
       void saveChapter(next, true).then(() => void refreshShelves());
       return;
     }
     saveTimer.current = setTimeout(() => {
-      void saveChapter(chapterRef.current ?? next);
+      void saveChapter(jobRef.current ?? next);
     }, 1800);
   }, [refreshShelves]);
+
+/**
+   * Leaving the tab must not strand half-streamed paragraphs in the buffer, and
+   * must not lose them if the browser discards the page while it is away.
+   */
+  useEffect(() => {
+    const settle = () => {
+      flush();
+      const current = jobRef.current;
+      if (current) void saveChapter(current, true);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") settle();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", settle);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", settle);
+    };
+  }, [flush]);
 
   /** The glossary belongs to the novel, not the chapter - persist it there. */
   const persistSeriesGlossary = useCallback(
@@ -200,7 +297,10 @@ export default function Page() {
       abortRef.current = controller;
 
       let working = { ...target, status: "translating" as const };
-      setChapter(working);
+      jobRef.current = working;
+      setJob({ id: working.id, title: working.translatedTitle || working.title });
+      // Mirror onto the screen only if this is the chapter being read.
+      setChapter((prev) => (prev && prev.id === working.id ? working : prev));
       persist(working, true);
 
       // 1. Glossary pass — locks names before any prose is written. It runs on
@@ -225,16 +325,21 @@ export default function Page() {
               glossary: merged,
               translatedTitle: result.title || working.translatedTitle,
             };
-            setChapter(working);
+            setChapter((prev) => (prev && prev.id === working.id ? working : prev));
+            setJob({
+              id: working.id,
+              title: working.translatedTitle || working.title,
+            });
             persist(working, true);
             await persistSeriesGlossary(merged);
           }
         } catch (e) {
           setPhase("idle");
+          setJob(null);
           const message = e instanceof Error ? e.message : "เตรียมคำศัพท์ไม่สำเร็จ";
           push(message, "error");
           const failed = { ...working, status: "error" as const };
-          setChapter(failed);
+          setChapter((prev) => (prev && prev.id === failed.id ? failed : prev));
           persist(failed, true);
           if (/API Key/.test(message)) setShowSettings(true);
           return;
@@ -268,7 +373,7 @@ export default function Page() {
         onChunkDone: (done, total) => {
           const ratio = total ? done / total : 1;
           setProgress(ratio);
-          const current = chapterRef.current;
+          const current = jobRef.current;
           if (current) persist({ ...current, progress: ratio });
         },
         onError: (message) => {
@@ -278,9 +383,10 @@ export default function Page() {
 
       flush();
       setPhase("idle");
+      setJob(null);
       abortRef.current = null;
 
-      const finished = chapterRef.current ?? working;
+      const finished = jobRef.current ?? working;
       const done = finished.paragraphs.every((p) => p.target);
       const final: Chapter = {
         ...finished,
@@ -288,8 +394,9 @@ export default function Page() {
         progress: 1,
         updatedAt: Date.now(),
       };
-      setChapter(final);
+      setChapter((prev) => (prev && prev.id === final.id ? final : prev));
       persist(final, true);
+      jobRef.current = null;
 
       if (failure) {
         push(failure, "error");
@@ -297,7 +404,7 @@ export default function Page() {
       } else if (controller.signal.aborted) {
         push("หยุดแปลแล้ว");
       } else {
-        push("แปลเสร็จแล้ว", "success");
+        push(`แปลเสร็จแล้ว — ${final.translatedTitle || final.title}`, "success");
       }
     },
     [config, style, persist, push, schedule, flush, persistSeriesGlossary],
@@ -544,7 +651,33 @@ export default function Page() {
     .filter((s) => s.series.id)
     .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
 
+  /** Drops every trace of the previous reader before the next one signs in. */
+  const handleSignedOut = () => {
+    stop();
+    setChapter(null);
+    setLibrary([]);
+    setAllSeries([]);
+    setSeries(null);
+    seriesRef.current = null;
+    setOpenShelf(null);
+    setGlossarySeries(null);
+    setShelfId("");
+  };
+
   /* --------------------------------- views -------------------------------- */
+
+  // Nothing about the library renders until we know whose it is.
+  if (!mounted || cloud.status === "connecting") {
+    return (
+      <main className="relative z-10 grid min-h-dvh place-items-center">
+        <Loader2 size={22} className="animate-spin text-[var(--fg-dim)]" />
+      </main>
+    );
+  }
+
+  if (cloud.status !== "ready") {
+    return <AuthGate onSignedIn={() => void loadLibrary()} />;
+  }
 
   if (!chapter) {
     return (
@@ -566,6 +699,18 @@ export default function Page() {
           shelfId={shelfId}
           onShelfChange={setShelfId}
         />
+
+        {job ? (
+          <JobBanner
+            title={job.title}
+            label={`${PHASE_LABEL[phase] || "กำลังทำงาน"}${
+              phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
+            }`}
+            progress={phase === "translating" ? progress : 0}
+            onOpen={() => void openChapter(job.id)}
+            onStop={stop}
+          />
+        ) : null}
 
         {mounted ? (
           <Bookshelf shelves={shelves} onOpen={setOpenShelf} />
@@ -592,6 +737,7 @@ export default function Page() {
             removeChapter,
             setLibrary,
             push,
+            onSignedOut: handleSignedOut,
           }}
         />
         <ShelfSheet
@@ -625,17 +771,15 @@ export default function Page() {
       <ReaderHeader
         chapter={chapter}
         visible={chrome.visible}
-        busy={busy}
+        busy={viewingJob}
         busyLabel={`${PHASE_LABEL[phase]}${
           phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
         }`}
         progress={progress}
         width={reader.maxWidth}
         showSource={reader.showSource}
-        onBack={() => {
-          stop();
-          setChapter(null);
-        }}
+        // Going back leaves the translation running in the background.
+        onBack={() => setChapter(null)}
         onStop={stop}
         onToggleSource={() => setReader({ showSource: !reader.showSource })}
         onGlossary={() => openGlossaryFor(series)}
@@ -647,7 +791,7 @@ export default function Page() {
       <ReaderDock
         visible={chrome.visible}
         progress={chrome.progress}
-        busy={busy}
+        busy={viewingJob}
         missing={missing}
         hasNext={Boolean(chapter.nextUrl)}
         width={reader.maxWidth}
@@ -662,7 +806,7 @@ export default function Page() {
         open={showTools}
         onClose={() => setShowTools(false)}
         glossaryCount={series?.glossary.length ?? chapter.glossary.length}
-        missing={busy ? 0 : missing}
+        missing={viewingJob ? 0 : missing}
         showSource={reader.showSource}
         onToggleSource={(v) => setReader({ showSource: v })}
         onCopy={copyAll}
@@ -693,6 +837,7 @@ export default function Page() {
           removeChapter,
           setLibrary,
           push,
+          onSignedOut: handleSignedOut,
         }}
       />
       <CostGate
@@ -752,6 +897,47 @@ function TopChrome({
   );
 }
 
+/** Shows a background translation from the home screen, with a way into it. */
+function JobBanner({
+  title,
+  label,
+  progress,
+  onOpen,
+  onStop,
+}: {
+  title: string;
+  label: string;
+  progress: number;
+  onOpen: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div className="mx-auto w-full max-w-[680px] px-5 pb-8">
+      <div className="rise flex items-center gap-3 rounded-2xl border border-[var(--accent)]/35 bg-[var(--accent-soft)] p-3.5">
+        <Loader2 size={18} className="shrink-0 animate-spin text-[var(--accent)]" />
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[13.5px] font-medium">{title}</p>
+          <p className="mt-0.5 text-[12px] text-[var(--accent)]">{label}</p>
+          <div className="mt-2 h-1 overflow-hidden rounded-full bg-[var(--line)]">
+            <div
+              className="h-full rounded-full bg-[var(--accent)] transition-[width] duration-500 ease-out"
+              style={{ width: `${Math.round(progress * 100)}%` }}
+            />
+          </div>
+        </div>
+
+        <Button variant="ghost" size="sm" onClick={onOpen} className="shrink-0">
+          เปิดอ่าน
+        </Button>
+        <Button variant="ghost" size="icon" onClick={onStop} aria-label="หยุดแปล">
+          <StopCircle size={18} className="text-red-400" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Sheets(props: {
   showSettings: boolean;
   setShowSettings: (v: boolean) => void;
@@ -772,6 +958,7 @@ function Sheets(props: {
   removeChapter: (id: string) => void;
   setLibrary: (c: Chapter[]) => void;
   push: (message: string, tone?: "info" | "error" | "success") => void;
+  onSignedOut: () => void;
 }) {
   return (
     <>
@@ -801,6 +988,7 @@ function Sheets(props: {
         open={props.showAccount}
         onClose={() => props.setShowAccount(false)}
         onNotify={props.push}
+        onSignedOut={props.onSignedOut}
       />
     </>
   );

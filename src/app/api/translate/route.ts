@@ -1,4 +1,5 @@
 import { streamText, toProviderError } from "@/lib/ai";
+import { sampleChapter } from "@/lib/chunk";
 import { buildGlossaryPrompt, buildSystemPrompt, buildUserMessage } from "@/lib/prompt";
 import type { GlossaryEntry, ProviderConfig, StyleSettings } from "@/lib/types";
 
@@ -14,6 +15,7 @@ interface Body {
   paragraphs: { id: number; text: string }[];
   previousSource?: string;
   previousTarget?: string;
+  styleSample?: string;
 }
 
 function sse(event: string, data: unknown): Uint8Array {
@@ -44,16 +46,33 @@ export async function POST(req: Request) {
     : buildSystemPrompt(body.style, body.glossary ?? []);
 
   const user = isGlossary
-    ? `Chapter title: ${body.title ?? "(untitled)"}\n\nExcerpt:\n${body.paragraphs
-        .map((p) => p.text)
-        .join("\n\n")
-        .slice(0, 6000)}`
+    ? [
+        `Chapter title: ${body.title ?? "(untitled)"}`,
+        "",
+        "Excerpt (sampled across the whole chapter):",
+        sampleChapter(body.paragraphs.map((p) => p.text)),
+      ].join("\n")
     : buildUserMessage({
         paragraphs: body.paragraphs,
         previousSource: body.previousSource,
         previousTarget: body.previousTarget,
+        styleSample: body.styleSample,
         title: body.title,
       });
+
+  // Thai and most other target scripts run longer than the source, so allow
+  // roughly three times the input instead of always reserving the maximum.
+  const sourceChars = body.paragraphs.reduce((n, p) => n + p.text.length, 0);
+  const maxTokens = isGlossary
+    ? 4000
+    : Math.min(16000, Math.max(2000, Math.ceil(sourceChars / 2) + 1200));
+
+  // Faithful work wants the cooler end; literary prose needs a little room.
+  const temperature = isGlossary
+    ? 0
+    : body.style.tone === "literary"
+      ? 0.45
+      : 0.25;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -66,7 +85,11 @@ export async function POST(req: Request) {
           system,
           user,
           effort: isGlossary ? "low" : body.style.effort,
-          maxTokens: isGlossary ? 4000 : 16000,
+          maxTokens,
+          temperature,
+          // Every chunk of every chapter in a novel repeats this exact system
+          // prompt, glossary and all — well worth caching.
+          cacheSystem: !isGlossary,
           signal: abort.signal,
         })) {
           controller.enqueue(sse("delta", delta));

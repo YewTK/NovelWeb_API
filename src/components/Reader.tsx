@@ -6,6 +6,19 @@ import type { Chapter } from "@/lib/types";
 import type { FontKey, ReaderPrefs } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
+/**
+ * The model sometimes returns several prose paragraphs under a single marker.
+ * Splitting them here means each one gets the reader's paragraph spacing and
+ * first-line indent instead of running together into one wall of text.
+ */
+function splitBlocks(text: string): string[] {
+  const parts = text
+    .split(/[\r\n]+/)
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : [text];
+}
+
 const FONT_CLASS: Record<FontKey, string> = {
   sans: "font-sans",
   serif: "font-serif",
@@ -109,7 +122,14 @@ export function Reader({
                   </p>
                 )
               ) : (
-                <p className={cn(isActive && "caret")}>{p.target}</p>
+                splitBlocks(p.target).map((block, bi, all) => (
+                  <p
+                    key={bi}
+                    className={cn(isActive && bi === all.length - 1 && "caret")}
+                  >
+                    {block}
+                  </p>
+                ))
               )}
             </div>
           );

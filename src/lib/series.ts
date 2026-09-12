@@ -114,3 +114,63 @@ export function deriveSeries(title: string, url: string | null): SeriesRef {
 export function nameKey(name: string): string {
   return name.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
+
+/* ------------------------------ chapter number ---------------------------- */
+
+const THAI_DIGITS = "๐๑๒๓๔๕๖๗๘๙";
+
+function toArabic(raw: string): string {
+  return raw.replace(/[๐-๙]/g, (d) => String(THAI_DIGITS.indexOf(d)));
+}
+
+/**
+ * "บทที่ 1781", "Chapter 1780", "ตอนที่ ๑๒" — the number a reader orders by.
+ * Chapter words are tried before volume/part words, so "Vol. 2 Chapter 15"
+ * reports 15 rather than 2.
+ */
+const CHAPTER_WORD =
+  /(?:chapter|chap\.?|ch\.?|episode|epis\.?|ep\.?|บทที่|ตอนที่|ตอน|บท|第|제)\s*[-_ ]?([\d๐-๙]{1,6}(?:\.\d{1,2})?)/i;
+
+const VOLUME_WORD =
+  /(?:part|vol\.?|volume)\s*[-_ ]?([\d๐-๙]{1,6}(?:\.\d{1,2})?)/i;
+
+/** A trailing "/chapter-1780" or "/1780" in the source URL. */
+const URL_NUMBER = /(?:chapter|chap|ch|episode|ep|part)[-_/]?(\d{1,6})|\/(\d{1,6})(?:\.html?)?\/?$/i;
+
+/**
+ * The chapter's position within its novel, or null when nothing says.
+ * Titles are checked before URLs because a translated title carries the
+ * number the reader actually recognises.
+ */
+export function chapterNumber(chapter: {
+  title: string;
+  translatedTitle?: string;
+  sourceUrl?: string | null;
+}): number | null {
+  const titles = [chapter.translatedTitle, chapter.title].filter(Boolean) as string[];
+  for (const pattern of [CHAPTER_WORD, VOLUME_WORD]) {
+    for (const text of titles) {
+      const hit = pattern.exec(text);
+      if (hit) {
+        const n = Number(toArabic(hit[1]));
+        if (Number.isFinite(n)) return n;
+      }
+    }
+  }
+
+  if (chapter.sourceUrl) {
+    const hit = URL_NUMBER.exec(chapter.sourceUrl);
+    const found = hit?.[1] ?? hit?.[2];
+    if (found) {
+      const n = Number(found);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return null;
+}
+
+/** Short badge text, e.g. "ตอนที่ 1781". */
+export function chapterLabel(n: number | null): string | null {
+  if (n === null) return null;
+  return `ตอนที่ ${Number.isInteger(n) ? n : n.toFixed(1)}`;
+}

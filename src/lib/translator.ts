@@ -149,6 +149,9 @@ export async function runTranslation(job: TranslateJob): Promise<void> {
 
   const translated = new Map<number, string>();
 
+  /** Finished prose from the opening section, used to hold the voice steady. */
+  let styleSample: string | undefined;
+
   const runChunk = async (chunk: Chunk) => {
     const prev = allChunks[chunk.index - 1];
     const previousSource = prev ? tailOf(prev.units) : undefined;
@@ -188,6 +191,7 @@ export async function runTranslation(job: TranslateJob): Promise<void> {
         paragraphs: chunk.units,
         previousSource,
         previousTarget,
+        styleSample,
       },
       job.signal,
       {
@@ -215,6 +219,19 @@ export async function runTranslation(job: TranslateJob): Promise<void> {
     job.onChunkDone(completed, total);
   };
 
+  // The opening section runs on its own so its finished prose can anchor the
+  // voice of everything after it. The rest go out in parallel and would each
+  // otherwise settle on their own register, pronouns and naming.
+  if (chunks.length && !job.signal.aborted) {
+    await runChunk(chunks[0]);
+    cursor = 1;
+
+    const opening = chunks[0].units
+      .map((u) => ({ text: translated.get(u.id) ?? "" }))
+      .filter((u) => u.text);
+    styleSample = tailOf(opening, 700) || undefined;
+  }
+
   const worker = async () => {
     while (!fatal && !job.signal.aborted) {
       const index = cursor++;
@@ -224,7 +241,7 @@ export async function runTranslation(job: TranslateJob): Promise<void> {
   };
 
   await Promise.all(
-    Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, worker),
+    Array.from({ length: Math.min(CONCURRENCY, chunks.length - 1) }, worker),
   );
 
   if (fatal) job.onError(fatal);

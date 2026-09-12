@@ -85,3 +85,50 @@ create trigger series_touch before update on public.series
 drop trigger if exists chapters_touch on public.chapters;
 create trigger chapters_touch before update on public.chapters
   for each row execute function public.touch_updated_at();
+
+
+/* ========================================================================== */
+/*  ระบบล็อกอินด้วย username / password                                        */
+/* ========================================================================== */
+--
+-- แอปแมป username -> อีเมลสังเคราะห์ "<username>@novelflow.app" แล้วใช้
+-- Supabase Auth จัดการแฮชรหัสผ่าน/เซสชัน/JWT ให้ ผู้ใช้ไม่เคยเห็นอีเมลนี้
+-- และไม่มีการส่งเมลจริงไปที่โดเมนนี้
+--
+-- ** ต้องตั้งค่า 2 อย่างนี้ใน Supabase Dashboard ก่อน ไม่งั้นล็อกอินไม่ได้ **
+--
+--   Authentication -> Sign In / Providers -> Email
+--     1) Confirm email           = ปิด   (สำคัญที่สุด — ถ้าเปิดไว้จะเข้าระบบไม่ได้
+--                                        เพราะอีเมลสังเคราะห์รับเมลยืนยันไม่ได้)
+--     2) Allow new users to sign up = เปิด (ไว้สมัครบัญชีแรก แล้วจะปิดทีหลังก็ได้)
+--
+--   ปิด Anonymous sign-ins ได้แล้ว — แอปไม่ใช้อีกต่อไป
+--
+-- RLS ของตารางด้านบนไม่ต้องแก้อะไร: policy ใช้ auth.uid() = user_id อยู่แล้ว
+-- ข้อมูลของแต่ละบัญชีจึงแยกจากกันโดยอัตโนมัติ
+
+
+/* ---- ย้ายข้อมูลเดิมบนคลาวด์เข้าบัญชี admin (รันหลังสมัคร admin แล้ว) ------- */
+--
+-- ใช้เมื่อเคยมีข้อมูลที่สร้างไว้ตอนยังใช้ anonymous sign-in
+-- (ข้อมูลที่อยู่ในเครื่อง/เบราว์เซอร์ แอปจะย้ายเข้าบัญชี admin ให้เองอัตโนมัติ
+--  ครั้งแรกที่ล็อกอินเป็น admin — บล็อกนี้จัดการเฉพาะแถวที่อยู่บนคลาวด์แล้ว)
+
+do $$
+declare
+  admin_id uuid;
+begin
+  select id into admin_id
+  from auth.users
+  where email = 'admin@novelflow.app';
+
+  if admin_id is null then
+    raise notice 'ยังไม่มีบัญชี admin — สมัครในแอปก่อนแล้วค่อยรันใหม่';
+    return;
+  end if;
+
+  update public.series   set user_id = admin_id where user_id <> admin_id;
+  update public.chapters set user_id = admin_id where user_id <> admin_id;
+
+  raise notice 'ย้ายข้อมูลทั้งหมดเข้าบัญชี admin เรียบร้อย';
+end $$;

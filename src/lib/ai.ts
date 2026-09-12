@@ -8,6 +8,14 @@ export interface GenerateOptions {
   user: string;
   effort: Effort;
   maxTokens?: number;
+  /** Lower keeps terminology and register stable; higher loosens the prose. */
+  temperature?: number;
+  /**
+   * Marks the system prompt as cacheable. The prompt carries the whole locked
+   * glossary and is identical for every chunk of every chapter in a novel, so
+   * caching it turns a large repeated input cost into a cheap cache read.
+   */
+  cacheSystem?: boolean;
   signal?: AbortSignal;
 }
 
@@ -44,13 +52,26 @@ async function* anthropicStream(o: GenerateOptions): AsyncGenerator<string> {
     timeout: 180_000,
   });
 
+  const usesEffort = supportsEffort(o.config.model);
+
   const base = {
     model: o.config.model,
     max_tokens: o.maxTokens ?? 16000,
-    system: o.system,
+    system: o.cacheSystem
+      ? [
+          {
+            type: "text" as const,
+            text: o.system,
+            cache_control: { type: "ephemeral" as const },
+          },
+        ]
+      : o.system,
     messages: [{ role: "user" as const, content: o.user }],
-    ...(supportsEffort(o.config.model)
-      ? { output_config: { effort: o.effort } }
+    ...(usesEffort ? { output_config: { effort: o.effort } } : {}),
+    // Effort-controlled models pick their own sampling; for the rest a cooler
+    // setting keeps names and register from drifting between chunks.
+    ...(!usesEffort && o.temperature !== undefined
+      ? { temperature: o.temperature }
       : {}),
   };
 
@@ -136,7 +157,7 @@ async function* openAiStream(o: GenerateOptions): AsyncGenerator<string> {
     body: JSON.stringify({
       model: o.config.model,
       max_tokens: o.maxTokens ?? 16000,
-      temperature: 0.7,
+      temperature: o.temperature ?? 0.3,
       stream: true,
       messages: [
         { role: "system", content: o.system },
@@ -176,7 +197,7 @@ async function* googleStream(o: GenerateOptions): AsyncGenerator<string> {
       systemInstruction: { parts: [{ text: o.system }] },
       contents: [{ role: "user", parts: [{ text: o.user }] }],
       generationConfig: {
-        temperature: 0.7,
+        temperature: o.temperature ?? 0.3,
         maxOutputTokens: o.maxTokens ?? 16000,
       },
       safetySettings: [

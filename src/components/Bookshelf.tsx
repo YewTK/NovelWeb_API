@@ -10,6 +10,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
+import { chapterLabel, chapterNumber } from "@/lib/series";
 import { cn, formatRelative } from "@/lib/utils";
 import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button, Sheet } from "./ui";
@@ -56,8 +57,17 @@ export function buildShelves(series: Series[], chapters: Chapter[]): Shelf[] {
     });
   }
 
+  // Reading order, not edit order: a shelf should read 1, 2, 3 like a book.
+  // Chapters whose number cannot be worked out sink to the bottom, newest first.
   for (const shelf of shelves) {
-    shelf.chapters.sort((a, b) => b.updatedAt - a.updatedAt);
+    shelf.chapters.sort((a, b) => {
+      const na = chapterNumber(a);
+      const nb = chapterNumber(b);
+      if (na !== null && nb !== null) return na - nb;
+      if (na !== null) return -1;
+      if (nb !== null) return 1;
+      return b.updatedAt - a.updatedAt;
+    });
   }
   return shelves.sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -85,6 +95,17 @@ function Spine({ name, seed }: { name: string; seed: string }) {
   );
 }
 
+/** "ตอนที่ 1780–1782" across a whole shelf, or null when nothing is numbered. */
+function chapterRange(chapters: Chapter[]): string | null {
+  const numbers = chapters
+    .map((c) => chapterNumber(c))
+    .filter((n): n is number => n !== null);
+  if (!numbers.length) return null;
+  const low = Math.min(...numbers);
+  const high = Math.max(...numbers);
+  return low === high ? `ตอนที่ ${low}` : `ตอนที่ ${low}–${high}`;
+}
+
 /* -------------------------------- the shelf ------------------------------- */
 
 export function Bookshelf({
@@ -105,6 +126,7 @@ export function Bookshelf({
       <div className="grid gap-2 sm:grid-cols-2">
         {shelves.map((shelf) => {
           const done = shelf.chapters.filter((c) => c.status === "done").length;
+          const range = chapterRange(shelf.chapters);
           return (
             <button
               key={shelf.series.id || "orphans"}
@@ -119,6 +141,7 @@ export function Bookshelf({
                 </span>
                 <span className="mt-1.5 block text-[11.5px] text-[var(--fg-dim)]">
                   {shelf.chapters.length} ตอน
+                  {range ? ` · ${range}` : ""}
                   {done > 0 ? ` · แปลจบ ${done}` : ""}
                 </span>
                 <span className="mt-0.5 block text-[11.5px] text-[var(--fg-dim)]">
@@ -219,6 +242,11 @@ export function ShelfSheet({
                 }}
                 className="min-w-0 flex-1 text-left"
               >
+                {chapterLabel(chapterNumber(c)) ? (
+                  <span className="mb-1 inline-block rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)]">
+                    {chapterLabel(chapterNumber(c))}
+                  </span>
+                ) : null}
                 <span className="line-clamp-2 text-[13.5px] font-medium leading-snug">
                   {c.translatedTitle || c.title}
                 </span>
