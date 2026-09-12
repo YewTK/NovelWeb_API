@@ -1,20 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ArrowLeft,
-  BookMarked,
-  Columns2,
-  Copy,
-  Download,
-  Languages,
-  Settings2,
-  SlidersHorizontal,
-  Sparkles,
-  StopCircle,
-  UserRound,
-  RefreshCw,
-} from "lucide-react";
+import { BookMarked, Settings2, UserRound } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import {
   Bookshelf,
@@ -22,7 +9,14 @@ import {
   buildShelves,
   type Shelf,
 } from "@/components/Bookshelf";
+import type { ShelfOption } from "@/components/ShelfPicker";
 import { Reader } from "@/components/Reader";
+import {
+  ReaderDock,
+  ReaderHeader,
+  ReaderToolsSheet,
+  useReaderScroll,
+} from "@/components/ReaderChrome";
 import { SettingsSheet } from "@/components/SettingsSheet";
 import {
   AccountSheet,
@@ -42,6 +36,7 @@ import {
   initCloud,
   listChapters,
   listSeries,
+  mergeIntoSeries,
   pullChapters,
   pullSeries,
   saveChapter,
@@ -84,6 +79,7 @@ export default function Page() {
   const [showGlossary, setShowGlossary] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
+  const [showTools, setShowTools] = useState(false);
   const [confirm, setConfirm] = useState<{ draft: Chapter; estimate: Estimate } | null>(
     null,
   );
@@ -92,6 +88,8 @@ export default function Page() {
   const [allSeries, setAllSeries] = useState<Series[]>([]);
   const [openShelf, setOpenShelf] = useState<Shelf | null>(null);
   const [glossarySeries, setGlossarySeries] = useState<Series | null>(null);
+  /** Shelf the reader pinned by hand; "" lets the link decide. */
+  const [shelfId, setShelfId] = useState("");
 
   const chapterRef = useRef<Chapter | null>(null);
   const seriesRef = useRef<Series | null>(null);
@@ -103,6 +101,7 @@ export default function Page() {
 
   chapterRef.current = chapter;
   const busy = phase !== "idle";
+  const chrome = useReaderScroll(busy);
 
   /* ------------------------------- bootstrap ------------------------------ */
 
@@ -305,7 +304,7 @@ export default function Page() {
   );
 
   const start = useCallback(
-    async (input: string, kind: "url" | "text") => {
+    async (input: string, kind: "url" | "text", pinnedSeriesId?: string) => {
       if (!config.apiKey) {
         setShowSettings(true);
         push("ใส่ API Key ก่อนเริ่มแปล", "error");
@@ -354,9 +353,12 @@ export default function Page() {
       }
 
       // Group this chapter with the rest of its novel and inherit its glossary.
-      const novel = await ensureSeries(
-        deriveSeries(source.title, source.url || null),
-      );
+      // A shelf the reader picked wins over the one derived from the link —
+      // that is the only way the same novel read on two sites lands together.
+      const pinned = pinnedSeriesId ?? shelfId;
+      const novel =
+        (pinned ? await getSeriesById(pinned) : undefined) ??
+        (await ensureSeries(deriveSeries(source.title, source.url || null)));
       seriesRef.current = novel;
       setSeries(novel);
       setAllSeries((list) =>
@@ -400,7 +402,7 @@ export default function Page() {
 
       await translate(draft);
     },
-    [config, style, push, translate],
+    [config, style, push, translate, shelfId],
   );
 
   const stop = () => {
@@ -508,8 +510,39 @@ export default function Page() {
     URL.revokeObjectURL(a.href);
   };
 
+  /** Folds one shelf into another — the repair for a novel that split in two. */
+  const mergeShelf = async (from: Shelf, targetId: string) => {
+    const merged = await mergeIntoSeries(
+      { seriesId: from.series.id, chapterIds: from.chapters.map((c) => c.id) },
+      targetId,
+    );
+    if (!merged) {
+      push("รวมชั้นหนังสือไม่สำเร็จ", "error");
+      return;
+    }
+
+    setOpenShelf(null);
+    setShelfId((id) => (id === from.series.id ? targetId : id));
+    setGlossarySeries((g) => (g && g.id === merged.id ? merged : g));
+    if (seriesRef.current?.id === from.series.id || seriesRef.current?.id === targetId) {
+      seriesRef.current = merged;
+      setSeries(merged);
+    }
+    setChapter((prev) =>
+      prev && prev.seriesId === from.series.id
+        ? { ...prev, seriesId: targetId }
+        : prev,
+    );
+
+    await refreshShelves();
+    push(`รวมเข้าชั้น “${merged.name}” แล้ว`, "success");
+  };
+
   const missing = chapter?.paragraphs.filter((p) => !p.target).length ?? 0;
   const shelves = buildShelves(allSeries, library);
+  const shelfOptions: ShelfOption[] = shelves
+    .filter((s) => s.series.id)
+    .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
 
   /* --------------------------------- views -------------------------------- */
 
@@ -529,6 +562,9 @@ export default function Page() {
           busyLabel={PHASE_LABEL[phase] || "กำลังทำงาน"}
           onSubmit={start}
           onOpenSettings={() => setShowSettings(true)}
+          shelves={mounted ? shelfOptions : []}
+          shelfId={shelfId}
+          onShelfChange={setShelfId}
         />
 
         {mounted ? (
@@ -560,10 +596,12 @@ export default function Page() {
         />
         <ShelfSheet
           shelf={openShelf}
+          shelves={shelves}
           onClose={() => setOpenShelf(null)}
           onOpenChapter={openChapter}
           onOpenGlossary={openGlossaryFor}
           onDeleteChapter={removeChapter}
+          onMerge={(from, targetId) => void mergeShelf(from, targetId)}
         />
         <CostGate
           pending={confirm}
@@ -584,127 +622,55 @@ export default function Page() {
       className="relative z-10 min-h-dvh"
       style={{ background: "var(--reader-bg)" }}
     >
-      <header className="sticky top-0 z-30 border-b border-[var(--line-soft)] bg-[var(--reader-bg)]/85 backdrop-blur-xl">
-        <div
-          className="mx-auto flex h-14 items-center gap-1 px-3 sm:px-5"
-          style={{ maxWidth: `${Math.max(reader.maxWidth, 720) + 120}px` }}
-        >
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => {
-              stop();
-              setChapter(null);
-            }}
-            aria-label="กลับหน้าแรก"
-          >
-            <ArrowLeft size={18} />
-          </Button>
-
-          <div className="min-w-0 flex-1 px-1">
-            <p className="truncate text-[13px] font-medium">
-              {chapter.translatedTitle || chapter.title}
-            </p>
-            {busy ? (
-              <p className="flex items-center gap-1.5 text-[11.5px] text-[var(--accent)]">
-                <span className="dot-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
-                {PHASE_LABEL[phase]}
-                {phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""}
-              </p>
-            ) : (
-              <p className="truncate text-[11.5px] text-[var(--fg-dim)]">
-                {chapter.siteName ?? "ข้อความที่วางไว้"}
-              </p>
-            )}
-          </div>
-
-          {busy ? (
-            <Button variant="ghost" size="icon" onClick={stop} aria-label="หยุดแปล">
-              <StopCircle size={18} className="text-red-400" />
-            </Button>
-          ) : null}
-
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setReader({ showSource: !reader.showSource })}
-            aria-label="แสดงต้นฉบับ"
-            className={cn(reader.showSource && "text-[var(--accent)]")}
-          >
-            <Columns2 size={17} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => openGlossaryFor(series)}
-            aria-label="คลังคำศัพท์"
-          >
-            <Languages size={17} />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setShowType(true)}
-            aria-label="การแสดงผล"
-          >
-            <SlidersHorizontal size={17} />
-          </Button>
-        </div>
-
-        <div
-          className="h-[2px] bg-[var(--accent)] transition-[width] duration-500 ease-out"
-          style={{ width: `${(busy ? progress : 1) * 100}%`, opacity: busy ? 1 : 0 }}
-        />
-      </header>
+      <ReaderHeader
+        chapter={chapter}
+        visible={chrome.visible}
+        busy={busy}
+        busyLabel={`${PHASE_LABEL[phase]}${
+          phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
+        }`}
+        progress={progress}
+        width={reader.maxWidth}
+        showSource={reader.showSource}
+        onBack={() => {
+          stop();
+          setChapter(null);
+        }}
+        onStop={stop}
+        onToggleSource={() => setReader({ showSource: !reader.showSource })}
+        onGlossary={() => openGlossaryFor(series)}
+        onTypography={() => setShowType(true)}
+      />
 
       <Reader chapter={chapter} prefs={reader} streaming={phase === "translating"} />
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center bg-gradient-to-t from-[var(--reader-bg)] via-[var(--reader-bg)]/90 to-transparent px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-8">
-        <div className="pointer-events-auto flex max-w-full items-center gap-1 overflow-x-auto rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]/95 p-1.5 shadow-2xl backdrop-blur-xl">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={copyAll}
-            disabled={busy}
-            aria-label="คัดลอกคำแปล"
-          >
-            <Copy size={14} />
-            <span className="hidden sm:inline">คัดลอก</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={download}
-            disabled={busy}
-            aria-label="บันทึกเป็นไฟล์"
-          >
-            <Download size={14} />
-            <span className="hidden sm:inline">บันทึกไฟล์</span>
-          </Button>
+      <ReaderDock
+        visible={chrome.visible}
+        progress={chrome.progress}
+        busy={busy}
+        missing={missing}
+        hasNext={Boolean(chapter.nextUrl)}
+        width={reader.maxWidth}
+        onTools={() => setShowTools(true)}
+        onFillGaps={fillGaps}
+        onNext={() => start(chapter.nextUrl!, "url", chapter.seriesId)}
+        onCopy={copyAll}
+        onDownload={download}
+      />
 
-          {!busy && missing > 0 ? (
-            <Button
-              variant="subtle"
-              size="sm"
-              onClick={fillGaps}
-              aria-label={`แปลย่อหน้าที่ค้าง ${missing} ย่อหน้า`}
-            >
-              <RefreshCw size={14} />
-              <span className="hidden sm:inline">แปลที่ค้าง</span> {missing}
-            </Button>
-          ) : null}
-
-          {!busy && chapter.nextUrl ? (
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => start(chapter.nextUrl!, "url")}
-            >
-              <Sparkles size={14} /> ตอนถัดไป
-            </Button>
-          ) : null}
-        </div>
-      </div>
+      <ReaderToolsSheet
+        open={showTools}
+        onClose={() => setShowTools(false)}
+        glossaryCount={series?.glossary.length ?? chapter.glossary.length}
+        missing={busy ? 0 : missing}
+        showSource={reader.showSource}
+        onToggleSource={(v) => setReader({ showSource: v })}
+        onCopy={copyAll}
+        onDownload={download}
+        onFillGaps={fillGaps}
+        onGlossary={() => openGlossaryFor(series)}
+        onTypography={() => setShowType(true)}
+      />
 
       <Sheets
         {...{

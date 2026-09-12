@@ -27,9 +27,10 @@ export function Reader({
     [chapter.paragraphs],
   );
 
+  // The padding clears the fixed header above and the dock below, safe area included.
   return (
     <article
-      className="mx-auto w-full px-5 pb-40 pt-6 sm:px-8"
+      className="mx-auto w-full px-5 pb-[calc(8.5rem_+_env(safe-area-inset-bottom))] pt-[4.75rem] sm:px-8 sm:pt-[5.25rem]"
       style={{ maxWidth: `${prefs.maxWidth}px` }}
     >
       <header className="mb-8 border-b border-[var(--line-soft)] pb-6">

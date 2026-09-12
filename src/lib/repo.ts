@@ -3,7 +3,8 @@
 import * as local from "./db";
 import { cloudConfigured, supabase } from "./supabase";
 import type { Chapter, Paragraph, GlossaryEntry, Series } from "./types";
-import type { SeriesRef } from "./series";
+import { nameKey, type SeriesRef } from "./series";
+import { mergeGlossary } from "./glossary";
 
 export type CloudStatus =
   | "disabled"
@@ -344,6 +345,11 @@ export async function ensureSeries(ref: SeriesRef): Promise<Series> {
   const existing = await local.getSeriesByKey(ref.key);
   if (existing) return existing;
 
+  // The key carries the host, so the same novel read on a second site would
+  // otherwise open a second shelf. Fall back to matching on the novel's name.
+  const twin = await findSeriesByName(ref.name);
+  if (twin) return twin;
+
   const created: Series = {
     id: crypto.randomUUID(),
     key: ref.key,
@@ -375,4 +381,53 @@ export async function deleteSeries(id: string): Promise<void> {
   await local.deleteSeries(id);
   const sb = supabase();
   if (sb && userId) await sb.from("series").delete().eq("id", id);
+}
+
+/** Finds an existing shelf whose name means the same novel, whatever site it came from. */
+export async function findSeriesByName(name: string): Promise<Series | undefined> {
+  const key = nameKey(name);
+  // Two or fewer characters is too thin a match to merge two shelves on.
+  if (key.length < 3) return undefined;
+  const all = await local.listSeries();
+  return all.find((s) => nameKey(s.name) === key);
+}
+
+/**
+ * Pulls chapters onto another novel's shelf, folding the two glossaries
+ * together so no locked term is lost, and retires the shelf they came from.
+ */
+export async function mergeIntoSeries(
+  source: { seriesId: string; chapterIds: string[] },
+  targetId: string,
+): Promise<Series | undefined> {
+  const target = await local.getSeries(targetId);
+  if (!target || targetId === source.seriesId) return undefined;
+
+  const from = source.seriesId ? await local.getSeries(source.seriesId) : undefined;
+  const merged: Series = {
+    ...target,
+    glossary: from ? mergeGlossary(target.glossary, from.glossary) : target.glossary,
+    updatedAt: Date.now(),
+  };
+  await local.saveSeries(merged);
+  void pushSeries(merged);
+
+  for (const id of source.chapterIds) {
+    const chapter = await local.loadChapter(id);
+    if (!chapter) continue;
+    await saveChapter({ ...chapter, seriesId: targetId, updatedAt: Date.now() }, true);
+  }
+
+  if (from) await deleteSeries(from.id);
+  return merged;
+}
+
+/** Renames a shelf — the handle the reader recognises the novel by. */
+export async function renameSeries(id: string, name: string): Promise<Series | undefined> {
+  const found = await local.getSeries(id);
+  if (!found) return undefined;
+  const next = { ...found, name: name.trim() || found.name, updatedAt: Date.now() };
+  await local.saveSeries(next);
+  void pushSeries(next);
+  return next;
 }

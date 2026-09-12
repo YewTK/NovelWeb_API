@@ -5,6 +5,7 @@ import {
   ArrowRight,
   ClipboardPaste,
   Languages,
+  Library,
   Link2,
   Loader2,
   Settings2,
@@ -14,6 +15,7 @@ import {
 import { TARGET_LANGUAGES, providerMeta } from "@/lib/models";
 import { useSettings } from "@/lib/store";
 import { cn, isProbablyUrl } from "@/lib/utils";
+import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button } from "./ui";
 
 export function Composer({
@@ -21,16 +23,24 @@ export function Composer({
   busyLabel,
   onSubmit,
   onOpenSettings,
+  shelves,
+  shelfId,
+  onShelfChange,
 }: {
   busy: boolean;
   busyLabel: string;
   onSubmit: (input: string, kind: "url" | "text") => void;
   onOpenSettings: () => void;
+  shelves: ShelfOption[];
+  /** empty string means the shelf is derived from the link */
+  shelfId: string;
+  onShelfChange: (id: string) => void;
 }) {
   const [value, setValue] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const { config, style, setStyle } = useSettings();
   const [mounted, setMounted] = useState(false);
+  const [pickingShelf, setPickingShelf] = useState(false);
 
   useEffect(() => setMounted(true), []);
 
@@ -68,6 +78,7 @@ export function Composer({
   const langLabel =
     TARGET_LANGUAGES.find((l) => l.code === style.targetLanguage)?.label ??
     style.targetLanguage;
+  const shelf = shelves.find((s) => s.series.id === shelfId) ?? null;
 
   return (
     <div className="mx-auto w-full max-w-[680px] px-5 pb-16 pt-[14vh] sm:pt-[16vh]">
@@ -192,6 +203,26 @@ export function Composer({
         </div>
 
         <button
+          onClick={() => setPickingShelf(true)}
+          className={cn(
+            "flex items-center gap-2 rounded-full border px-3.5 py-2 text-[12.5px] transition-colors",
+            shelf
+              ? "border-[var(--accent)]/45 bg-[var(--accent-soft)] text-[var(--accent)]"
+              : "border-[var(--line)] bg-[var(--bg-elev)] text-[var(--fg-muted)] hover:border-[var(--fg-dim)] hover:text-[var(--fg)]",
+          )}
+        >
+          <Library size={13} />
+          <span className="max-w-[170px] truncate">
+            {mounted && shelf ? shelf.series.name : "เลือกชั้นหนังสือ"}
+          </span>
+          {mounted && shelf && shelf.series.glossary.length > 0 ? (
+            <span className="rounded-md bg-[var(--accent)]/15 px-1.5 py-0.5 text-[10.5px] font-semibold">
+              {shelf.series.glossary.length} คำ
+            </span>
+          ) : null}
+        </button>
+
+        <button
           onClick={onOpenSettings}
           className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-3.5 py-2 text-[12.5px] text-[var(--fg-muted)] transition-colors hover:border-[var(--fg-dim)] hover:text-[var(--fg)]"
         >
@@ -204,6 +235,24 @@ export function Composer({
           ) : null}
         </button>
       </div>
+
+      {shelf ? (
+        <p className="rise mt-3 text-center text-[12px] leading-relaxed text-[var(--fg-dim)]">
+          ตอนใหม่จะถูกเก็บเข้าชั้น{" "}
+          <span className="font-medium text-[var(--fg-muted)]">
+            {shelf.series.name}
+          </span>{" "}
+          และใช้คลังคำศัพท์ชุดเดิม
+        </p>
+      ) : null}
+
+      <ShelfPicker
+        open={pickingShelf}
+        onClose={() => setPickingShelf(false)}
+        options={shelves}
+        selectedId={shelfId}
+        onSelect={onShelfChange}
+      />
     </div>
   );
 }

@@ -105,3 +105,12 @@ export function deriveSeries(title: string, url: string | null): SeriesRef {
   const identity = (slug ?? name).toLowerCase().replace(/\s+/g, "-");
   return { key: `${host}::${identity}`, name };
 }
+
+/**
+ * Comparison key for "is this the same novel?" across sites.
+ * Strips everything but letters and digits, so "Shadow Slave", "shadow-slave"
+ * and "Shadow  Slave!" all collapse onto the same value.
+ */
+export function nameKey(name: string): string {
+  return name.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}

@@ -1,8 +1,17 @@
 "use client";
 
-import { BookOpen, ChevronRight, Languages, Library, Trash2 } from "lucide-react";
+import { useState } from "react";
+import {
+  BookOpen,
+  ChevronRight,
+  FolderInput,
+  Languages,
+  Library,
+  Trash2,
+} from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
 import { cn, formatRelative } from "@/lib/utils";
+import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button, Sheet } from "./ui";
 
 export interface Shelf {
@@ -139,20 +148,30 @@ export function Bookshelf({
 
 export function ShelfSheet({
   shelf,
+  shelves,
   onClose,
   onOpenChapter,
   onOpenGlossary,
   onDeleteChapter,
+  onMerge,
 }: {
   shelf: Shelf | null;
+  /** every other shelf, offered as a destination when merging */
+  shelves: Shelf[];
   onClose: () => void;
   onOpenChapter: (id: string) => void;
   onOpenGlossary: (series: Series) => void;
   onDeleteChapter: (id: string) => void;
+  onMerge: (shelf: Shelf, targetId: string) => void;
 }) {
+  const [merging, setMerging] = useState(false);
+
   if (!shelf) return null;
 
   const hasSeries = Boolean(shelf.series.id);
+  const targets: ShelfOption[] = shelves
+    .filter((s) => s.series.id && s.series.id !== shelf.series.id)
+    .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
 
   return (
     <Sheet
@@ -173,6 +192,17 @@ export function ShelfSheet({
             <span className="text-[12px] text-[var(--fg-dim)]">
               {shelf.series.glossary.length} คำ
             </span>
+          </Button>
+        ) : null}
+
+        {targets.length > 0 ? (
+          <Button
+            variant="outline"
+            className="w-full justify-start"
+            onClick={() => setMerging(true)}
+          >
+            <FolderInput size={15} className="text-[var(--fg-muted)]" />
+            <span className="flex-1 text-left">รวมเข้ากับชั้นหนังสืออื่น</span>
           </Button>
         ) : null}
 
@@ -221,6 +251,16 @@ export function ShelfSheet({
           ))}
         </div>
       </div>
+
+      <ShelfPicker
+        open={merging}
+        onClose={() => setMerging(false)}
+        options={targets}
+        selectedId={shelf.series.id}
+        onSelect={(id) => {
+          if (id) onMerge(shelf, id);
+        }}
+      />
     </Sheet>
   );
 }
