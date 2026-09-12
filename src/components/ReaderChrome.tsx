@@ -209,11 +209,13 @@ function DockButton({
       disabled={disabled}
       className={cn(
         "flex h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-3",
-        "text-[13px] font-medium transition-all duration-200 active:scale-[0.96]",
+        "text-[13px] font-medium tracking-tight transition-colors duration-150",
+        "active:scale-[0.97] active:transition-transform",
         "disabled:pointer-events-none disabled:opacity-30",
         tone === "primary" &&
-          "bg-[var(--accent)] px-4 text-[#0a0c14] shadow-[0_6px_20px_-8px_var(--accent)]",
-        tone === "accent" && "bg-[var(--accent-soft)] text-[var(--accent)]",
+          "bg-[var(--btn)] px-4 text-[var(--btn-fg)] hover:bg-[var(--btn-hover)]",
+        tone === "accent" &&
+          "border border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)]",
         tone === "quiet" && "text-[var(--fg-muted)] hover:bg-[var(--bg-elev-2)]",
       )}
     >
@@ -221,7 +223,7 @@ function DockButton({
       {text}
       {iconAfter ? icon : null}
       {badge ? (
-        <span className="rounded-md bg-black/15 px-1.5 text-[11px] tabular-nums">
+        <span className="rounded-md bg-current/15 px-1.5 text-[11px] tabular-nums">
           {badge}
         </span>
       ) : null}

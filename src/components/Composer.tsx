@@ -95,10 +95,7 @@ export function Composer({
         <h1 className="text-balance text-[34px] font-semibold leading-[1.15] tracking-tight sm:text-[44px]">
           วางลิงก์นิยาย
           <br className="sm:hidden" />
-          <span className="bg-gradient-to-r from-[var(--accent)] to-[#ffb057] bg-clip-text text-transparent">
-            {" "}
-            อ่านเป็นภาษาไทยทันที
-          </span>
+          <span className="text-[var(--accent)]"> อ่านเป็นภาษาไทยทันที</span>
         </h1>
         <p className="mx-auto mt-3.5 max-w-[440px] text-balance text-[14.5px] leading-relaxed text-[var(--fg-muted)]">
           ก็อปลิงก์มาวาง หรือวางเนื้อหาดิบ ๆ ก็ได้ — ระบบจะดึงเนื้อหา
@@ -243,7 +240,7 @@ export function Composer({
           <Settings2 size={13} />
           {mounted ? modelLabel : "โมเดล"}
           {mounted && !config.apiKey ? (
-            <span className="ml-0.5 rounded-md bg-[#ffb057]/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-[#ffb057]">
+            <span className="ml-0.5 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--accent)]">
               ต้องใส่คีย์
             </span>
           ) : null}

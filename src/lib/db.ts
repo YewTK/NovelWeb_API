@@ -15,6 +15,15 @@ export function setScope(userId: string | null): void {
 
 const prefix = () => (scope ? `u:${scope}:` : "");
 
+/** Namespaced key for anything else this reader owns locally. */
+export function scopedKey(name: string): string {
+  return `${prefix()}${name}`;
+}
+
+export function hasScope(): boolean {
+  return Boolean(scope);
+}
+
 const CH = (id: string) => `${prefix()}chapter:${id}`;
 const SE = (id: string) => `${prefix()}series:${id}`;
 

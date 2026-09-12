@@ -2,22 +2,25 @@
 
 import { useState } from "react";
 import {
-  BookOpen,
-  ChevronRight,
-  FolderInput,
   ArrowDownNarrowWide,
   ArrowUpNarrowWide,
+  BookOpen,
+  BookOpenCheck,
+  Check,
+  ChevronRight,
+  FolderInput,
   Languages,
-  ListPlus,
   Library,
+  ListPlus,
   Trash2,
 } from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
 import { chapterLabel, chapterNumber } from "@/lib/series";
 import { useSettings } from "@/lib/store";
+import { statusOf, type ReadMark } from "@/lib/reading";
 import { cn, formatRelative } from "@/lib/utils";
 import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
-import { Button, Sheet } from "./ui";
+import { Button, ConfirmDialog, Sheet, useLongPress } from "./ui";
 
 export interface Shelf {
   series: Series;
@@ -171,6 +174,95 @@ export function Bookshelf({
   );
 }
 
+/* --------------------------------- a row ---------------------------------- */
+
+function ChapterRow({
+  chapter,
+  mark,
+  current,
+  onOpen,
+  onAskDelete,
+}: {
+  chapter: Chapter;
+  mark: ReadMark | undefined;
+  /** The chapter the reader was last in, resumed on the next launch. */
+  current: boolean;
+  onOpen: () => void;
+  onAskDelete: () => void;
+}) {
+  const press = useLongPress(onAskDelete);
+  const read = statusOf(mark);
+  const label = chapterLabel(chapterNumber(chapter));
+
+  return (
+    <button
+      {...press.handlers}
+      onClick={() => {
+        // The hold already opened the delete prompt; do not also open the chapter.
+        if (press.consumed()) return;
+        onOpen();
+      }}
+      className={cn(
+        "flex w-full select-none items-start gap-3 rounded-xl border p-3 text-left transition-all",
+        current
+          ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+          : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
+      )}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="mb-1 flex flex-wrap items-center gap-1.5">
+          {label ? (
+            <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)]">
+              {label}
+            </span>
+          ) : null}
+
+          {current ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--btn)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--btn-fg)]">
+              <BookOpenCheck size={10} /> กำลังอ่าน
+            </span>
+          ) : read === "read" ? (
+            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-400">
+              <Check size={10} /> อ่านแล้ว
+            </span>
+          ) : read === "reading" ? (
+            <span className="rounded-md bg-[var(--bg-elev-2)] px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--fg-muted)]">
+              อ่านค้างไว้ {Math.round((mark?.progress ?? 0) * 100)}%
+            </span>
+          ) : null}
+        </span>
+
+        <span
+          className={cn(
+            "line-clamp-2 text-[13.5px] font-medium leading-snug",
+            read === "read" && !current && "text-[var(--fg-muted)]",
+          )}
+        >
+          {chapter.translatedTitle || chapter.title}
+        </span>
+
+        <span className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11.5px] text-[var(--fg-dim)]">
+          <span>{formatRelative(chapter.updatedAt)}</span>
+          <span
+            className={cn(
+              chapter.status === "done" && "text-emerald-400",
+              chapter.status === "error" && "text-red-400",
+              chapter.status === "translating" && "text-[var(--accent)]",
+            )}
+          >
+            ·{" "}
+            {chapter.status === "done"
+              ? "แปลจบแล้ว"
+              : chapter.status === "error"
+                ? "มีข้อผิดพลาด"
+                : `${Math.round(chapter.progress * 100)}%`}
+          </span>
+        </span>
+      </span>
+    </button>
+  );
+}
+
 /* ---------------------------- one novel's shelf --------------------------- */
 
 export function ShelfSheet({
@@ -182,6 +274,9 @@ export function ShelfSheet({
   onDeleteChapter,
   onMerge,
   onQueueAll,
+  marks,
+  currentId,
+  onDeleteShelf,
 }: {
   shelf: Shelf | null;
   /** every other shelf, offered as a destination when merging */
@@ -192,8 +287,14 @@ export function ShelfSheet({
   onDeleteChapter: (id: string) => void;
   onMerge: (shelf: Shelf, targetId: string) => void;
   onQueueAll: (chapters: Chapter[]) => void;
+  marks: Record<string, ReadMark>;
+  /** Chapter the reader is part-way through, if any. */
+  currentId: string | null;
+  onDeleteShelf: (shelf: Shelf) => void;
 }) {
   const [merging, setMerging] = useState(false);
+  const [doomed, setDoomed] = useState<Chapter | null>(null);
+  const [killShelf, setKillShelf] = useState(false);
   const { shelfOrder, setShelfOrder } = useSettings();
 
   if (!shelf) return null;
@@ -259,6 +360,17 @@ export function ShelfSheet({
           </Button>
         ) : null}
 
+        {hasSeries ? (
+          <Button
+            variant="outline"
+            className="w-full justify-start text-red-400 hover:border-red-500/40 hover:bg-red-500/10"
+            onClick={() => setKillShelf(true)}
+          >
+            <Trash2 size={15} />
+            <span className="flex-1 text-left">ลบชั้นหนังสือนี้</span>
+          </Button>
+        ) : null}
+
         <div className="flex items-center justify-between gap-2 pt-1">
           <span className="text-[12px] font-semibold uppercase tracking-wider text-[var(--fg-dim)]">
             รายตอน
@@ -278,54 +390,62 @@ export function ShelfSheet({
 
         <div className="space-y-2">
           {ordered.map((c) => (
-            <div
+            <ChapterRow
               key={c.id}
-              className="group flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3 transition-all hover:border-[var(--fg-dim)]"
-            >
-              <button
-                onClick={() => {
-                  onOpenChapter(c.id);
-                  onClose();
-                }}
-                className="min-w-0 flex-1 text-left"
-              >
-                {chapterLabel(chapterNumber(c)) ? (
-                  <span className="mb-1 inline-block rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)]">
-                    {chapterLabel(chapterNumber(c))}
-                  </span>
-                ) : null}
-                <span className="line-clamp-2 text-[13.5px] font-medium leading-snug">
-                  {c.translatedTitle || c.title}
-                </span>
-                <span className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11.5px] text-[var(--fg-dim)]">
-                  <span>{formatRelative(c.updatedAt)}</span>
-                  <span
-                    className={cn(
-                      c.status === "done" && "text-emerald-400",
-                      c.status === "error" && "text-red-400",
-                      c.status === "translating" && "text-[var(--accent)]",
-                    )}
-                  >
-                    ·{" "}
-                    {c.status === "done"
-                      ? "แปลจบแล้ว"
-                      : c.status === "error"
-                        ? "มีข้อผิดพลาด"
-                        : `${Math.round(c.progress * 100)}%`}
-                  </span>
-                </span>
-              </button>
-              <button
-                onClick={() => onDeleteChapter(c.id)}
-                aria-label="ลบตอนนี้"
-                className="shrink-0 rounded-lg p-1.5 text-[var(--fg-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
+              chapter={c}
+              mark={marks[c.id]}
+              current={c.id === currentId}
+              onOpen={() => {
+                onOpenChapter(c.id);
+                onClose();
+              }}
+              onAskDelete={() => setDoomed(c)}
+            />
           ))}
         </div>
+
+        <p className="px-1 pt-1 text-center text-[11.5px] text-[var(--fg-dim)]">
+          กดค้างที่ตอนเพื่อลบ
+        </p>
       </div>
+
+      <ConfirmDialog
+        open={Boolean(doomed)}
+        title="ลบตอนนี้?"
+        confirmLabel="ลบ"
+        onCancel={() => setDoomed(null)}
+        onConfirm={() => {
+          if (doomed) onDeleteChapter(doomed.id);
+          setDoomed(null);
+        }}
+        body={
+          <p className="line-clamp-3 font-medium text-[var(--fg)]">
+            {doomed ? doomed.translatedTitle || doomed.title : ""}
+          </p>
+        }
+      />
+
+      <ConfirmDialog
+        open={killShelf}
+        title="ลบทั้งเรื่องนี้?"
+        confirmLabel="ลบทั้งหมด"
+        onCancel={() => setKillShelf(false)}
+        onConfirm={() => {
+          setKillShelf(false);
+          onDeleteShelf(shelf);
+          onClose();
+        }}
+        body={
+          <div className="space-y-2">
+            <p className="font-medium text-[var(--fg)]">{shelf.series.name}</p>
+            <p className="leading-relaxed">
+              จะลบทั้ง {shelf.chapters.length} ตอน และคลังคำศัพท์
+              {shelf.series.glossary.length} คำของเรื่องนี้ออกทั้งหมด
+              ทั้งในเครื่องและบนคลาวด์ — กู้คืนไม่ได้
+            </p>
+          </div>
+        }
+      />
 
       <ShelfPicker
         open={merging}

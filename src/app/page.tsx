@@ -38,6 +38,7 @@ import {
   initCloud,
   listChapters,
   consumeAdoptionNotice,
+  deleteShelf,
   listSeries,
   mergeIntoSeries,
   pullChapters,
@@ -48,6 +49,15 @@ import {
 import { deriveSeries } from "@/lib/series";
 import { cleanGlossary, mergeGlossary } from "@/lib/glossary";
 import { useSettings } from "@/lib/store";
+import {
+  clearCurrent,
+  forgetChapter,
+  loadReading,
+  openChapterMark,
+  progressMark,
+  saveReading,
+  type ReadingState,
+} from "@/lib/reading";
 import { runGlossaryPass, runTranslation } from "@/lib/translator";
 import type {
   Chapter,
@@ -90,6 +100,8 @@ export default function Page() {
   /** Chapters waiting their turn; they are translated one at a time, in order. */
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [showPdf, setShowPdf] = useState(false);
+  /** Which chapters have been read, and where the reader left off. */
+  const [reading, setReading] = useState<ReadingState>({ marks: {}, current: null });
 
   const [showSettings, setShowSettings] = useState(false);
   const [showType, setShowType] = useState(false);
@@ -122,6 +134,9 @@ export default function Page() {
   /** Breaks the translate -> start -> queue -> translate dependency cycle. */
   const continueRef = useRef<((url: string, seriesId: string) => void) | null>(null);
   const autoChainRef = useRef(0);
+  const readingRef = useRef<ReadingState>({ marks: {}, current: null });
+  const readingSave = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const restored = useRef(false);
 
   chapterRef.current = chapter;
   const busy = phase !== "idle";
@@ -137,15 +152,48 @@ export default function Page() {
     setAllSeries(novels);
   }, []);
 
+  /** Writes reading marks through to the device, coalescing rapid scrolls. */
+  const commitReading = useCallback((next: ReadingState, immediate = false) => {
+    readingRef.current = next;
+    setReading(next);
+    if (readingSave.current) clearTimeout(readingSave.current);
+    if (immediate) {
+      void saveReading(next);
+      return;
+    }
+    readingSave.current = setTimeout(() => {
+      void saveReading(readingRef.current);
+    }, 700);
+  }, []);
+
   /** Pulls this reader's library down and shows what was inherited, if anything. */
   const loadLibrary = useCallback(async () => {
     await refreshShelves();
     await pullChapters();
     await pullSeries();
     await refreshShelves();
+
+    const saved = await loadReading();
+    readingRef.current = saved;
+    setReading(saved);
+
     const adopted = consumeAdoptionNotice();
     if (adopted > 0) {
       push(`ย้ายชั้นหนังสือเดิมเข้าบัญชีนี้แล้ว ${adopted} ตอน`, "success");
+    }
+
+    // Drop the reader back where they were rather than at the front door.
+    if (!restored.current && saved.current) {
+      restored.current = true;
+      const resume = await getChapter(saved.current);
+      if (resume) {
+        seriesRef.current = resume.seriesId
+          ? ((await getSeriesById(resume.seriesId)) ?? null)
+          : null;
+        setSeries(seriesRef.current);
+        setChapter(resume);
+        setProgress(resume.progress);
+      }
     }
   }, [refreshShelves, push]);
 
@@ -266,7 +314,18 @@ export default function Page() {
     }, 1800);
   }, [refreshShelves]);
 
-/**
+  /**
+   * Records how far down the open chapter the reader has got. Past the
+   * threshold in reading.ts the chapter flips to "read" on its own, the way a
+   * novel site ticks one off once you reach the bottom.
+   */
+  useEffect(() => {
+    const id = chapter?.id;
+    if (!id) return;
+    commitReading(progressMark(readingRef.current, id, chrome.progress));
+  }, [chapter?.id, chrome.progress, commitReading]);
+
+  /**
    * Leaving the tab must not strand half-streamed paragraphs in the buffer, and
    * must not lose them if the browser discards the page while it is away.
    */
@@ -620,12 +679,20 @@ export default function Page() {
       setSeries(novel ?? null);
       setChapter(found);
       setProgress(found.progress);
+      commitReading(openChapterMark(readingRef.current, id), true);
       window.scrollTo({ top: 0 });
     }
   };
 
+  /** Leaves the reader; the chapter stops counting as the one in progress. */
+  const closeChapter = () => {
+    commitReading(clearCurrent(readingRef.current), true);
+    setChapter(null);
+  };
+
   const removeChapter = async (id: string) => {
     await repoDelete(id);
+    commitReading(forgetChapter(readingRef.current, id), true);
     await refreshShelves();
     setOpenShelf((shelf) =>
       shelf
@@ -757,6 +824,33 @@ export default function Page() {
     push(`เพิ่ม ${drafts.length} ตอนเข้าคิวแปลแล้ว`, "success");
   };
 
+  /** Deletes a whole novel, its chapters and its glossary. */
+  const removeShelf = async (target: Shelf) => {
+    const ids = target.chapters.map((c) => c.id);
+
+    // Nothing from this shelf should stay queued or on screen afterwards.
+    queueRef.current = queueRef.current.filter((q) => !ids.includes(q.id));
+    setQueue([...queueRef.current]);
+    if (chapterRef.current && ids.includes(chapterRef.current.id)) {
+      setChapter(null);
+    }
+
+    await deleteShelf(target.series.id, ids);
+
+    let marks = readingRef.current;
+    for (const id of ids) marks = forgetChapter(marks, id);
+    commitReading(marks, true);
+
+    if (shelfId === target.series.id) setShelfId("");
+    if (seriesRef.current?.id === target.series.id) {
+      seriesRef.current = null;
+      setSeries(null);
+    }
+    setOpenShelf(null);
+    await refreshShelves();
+    push(`ลบ “${target.series.name}” แล้ว`, "success");
+  };
+
   /** Folds one shelf into another — the repair for a novel that split in two. */
   const mergeShelf = async (from: Shelf, targetId: string) => {
     const merged = await mergeIntoSeries(
@@ -819,6 +913,9 @@ export default function Page() {
     setOpenShelf(null);
     setGlossarySeries(null);
     setShelfId("");
+    restored.current = false;
+    readingRef.current = { marks: {}, current: null };
+    setReading({ marks: {}, current: null });
   };
 
   /* --------------------------------- views -------------------------------- */
@@ -914,6 +1011,9 @@ export default function Page() {
           onOpenGlossary={openGlossaryFor}
           onDeleteChapter={removeChapter}
           onMerge={(from, targetId) => void mergeShelf(from, targetId)}
+          marks={reading.marks}
+          currentId={reading.current}
+          onDeleteShelf={(target) => void removeShelf(target)}
           onQueueAll={(chapters) => {
             enqueue(
               chapters.map((c) => ({
@@ -956,7 +1056,7 @@ export default function Page() {
         width={reader.maxWidth}
         showSource={reader.showSource}
         // Going back leaves the translation running in the background.
-        onBack={() => setChapter(null)}
+        onBack={closeChapter}
         onStop={stop}
         onToggleSource={() => setReader({ showSource: !reader.showSource })}
         onGlossary={() => openGlossaryFor(series)}
@@ -1059,7 +1159,7 @@ function TopChrome({
   return (
     <header className="fixed inset-x-0 top-0 z-30 flex items-center gap-2 border-b border-transparent bg-[var(--bg)]/80 px-4 py-3.5 backdrop-blur-xl sm:px-6">
       <div className="flex items-center gap-2 font-semibold tracking-tight">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--accent)] text-[13px] text-[#0a0c14]">
+        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--accent)] text-[13px] text-[var(--btn-fg)]">
           N
         </span>
         <span className="text-[15px]">NovelFlow</span>
@@ -1226,7 +1326,7 @@ function CostGate({
             </div>
             <div className="rounded-xl bg-[var(--bg)] py-2.5">
               <dt className="text-[11px] text-[var(--fg-dim)]">ค่าใช้จ่าย</dt>
-              <dd className="text-[15px] font-semibold text-[#ffb057]">
+              <dd className="text-[15px] font-semibold text-[var(--accent)]">
                 {estimate.usd === null ? "—" : formatUsd(estimate.usd)}
               </dd>
             </div>

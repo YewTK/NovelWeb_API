@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /* --------------------------------- Button -------------------------------- */
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "ghost" | "outline" | "subtle" | "danger";
+  variant?: "primary" | "accent" | "ghost" | "outline" | "subtle" | "danger";
   size?: "sm" | "md" | "lg" | "icon";
 };
 
@@ -21,21 +21,26 @@ export function Button({
     <button
       {...props}
       className={cn(
-        "inline-flex items-center justify-center gap-2 rounded-xl font-medium transition-all duration-200",
-        "disabled:pointer-events-none disabled:opacity-40 active:scale-[0.97]",
-        size === "sm" && "h-8 px-3 text-[13px]",
+        "inline-flex items-center justify-center gap-2 rounded-xl font-medium tracking-tight",
+        "transition-colors duration-150 active:scale-[0.98] active:transition-transform",
+        "disabled:pointer-events-none disabled:opacity-40",
+        size === "sm" && "h-9 px-3 text-[13px]",
         size === "md" && "h-10 px-4 text-sm",
         size === "lg" && "h-12 px-6 text-[15px]",
         size === "icon" && "h-10 w-10 shrink-0",
+        // Ink, not colour: a solid button should sit quietly beside prose.
         variant === "primary" &&
-          "bg-[var(--accent)] text-[#0a0c14] shadow-[0_6px_24px_-6px_var(--accent)] hover:brightness-110",
+          "bg-[var(--btn)] text-[var(--btn-fg)] hover:bg-[var(--btn-hover)]",
+        variant === "accent" &&
+          "border border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]",
         variant === "outline" &&
-          "border border-[var(--line)] bg-[var(--bg-elev)] hover:border-[var(--fg-dim)] hover:bg-[var(--bg-elev-2)]",
+          "border border-[var(--line)] bg-[var(--bg-elev)] text-[var(--fg)] hover:border-[var(--fg-dim)] hover:bg-[var(--bg-elev-2)]",
         variant === "subtle" &&
           "bg-[var(--bg-elev-2)] text-[var(--fg)] hover:bg-[var(--line-soft)]",
         variant === "ghost" &&
           "text-[var(--fg-muted)] hover:bg-[var(--bg-elev-2)] hover:text-[var(--fg)]",
-        variant === "danger" && "bg-red-500/12 text-red-400 hover:bg-red-500/20",
+        variant === "danger" &&
+          "bg-red-500/12 text-red-400 hover:bg-red-500/20",
         className,
       )}
     />
@@ -285,6 +290,56 @@ export function Slider({
       />
     </div>
   );
+}
+
+/* ------------------------------- Long press ------------------------------- */
+
+/**
+ * Runs an action only after the press is held down. Touch screens have no
+ * hover, so a destructive control cannot hide behind one — holding is what
+ * makes the intent deliberate instead of a mis-tap.
+ */
+export function useLongPress(onLongPress: () => void, ms = 500) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const origin = useRef<{ x: number; y: number } | null>(null);
+  const fired = useRef(false);
+
+  const clear = () => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    origin.current = null;
+  };
+
+  useEffect(() => clear, []);
+
+  return {
+    /** True when the press became a hold, so the click that follows is ignored. */
+    consumed: () => fired.current,
+    handlers: {
+      onPointerDown: (e: React.PointerEvent) => {
+        fired.current = false;
+        origin.current = { x: e.clientX, y: e.clientY };
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => {
+          fired.current = true;
+          timer.current = null;
+          onLongPress();
+        }, ms);
+      },
+      onPointerMove: (e: React.PointerEvent) => {
+        // A scroll should never arm the hold; a resting thumb still can.
+        const from = origin.current;
+        if (!from) return;
+        if (Math.hypot(e.clientX - from.x, e.clientY - from.y) > 10) clear();
+      },
+      onPointerUp: clear,
+      onPointerLeave: clear,
+      onPointerCancel: clear,
+      onContextMenu: (e: React.MouseEvent) => e.preventDefault(),
+    },
+  };
 }
 
 /* --------------------------------- Toasts -------------------------------- */

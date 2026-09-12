@@ -7,82 +7,86 @@
   --font-modern: "Kanit", "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
   --font-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
 
-  --color-ink-50: #f6f7fb;
-  --color-ink-100: #eceef6;
-  --color-ink-200: #d6dae9;
-  --color-ink-300: #b0b7d0;
-  --color-ink-400: #7e88a8;
-  --color-ink-500: #5a6383;
-  --color-ink-600: #414863;
-  --color-ink-700: #2c3149;
-  --color-ink-800: #1b1f31;
-  --color-ink-900: #11142150;
-  --color-ink-950: #0a0c14;
-
-  --color-brand-300: #a5b8ff;
-  --color-brand-400: #7f97ff;
-  --color-brand-500: #5c74f5;
-  --color-brand-600: #4553d8;
-  --color-brand-700: #3540ad;
-
-  --color-flare-400: #ffb057;
-  --color-flare-500: #ff8f3c;
-
   --radius-4xl: 2rem;
 }
 
+/*
+ * Surfaces are neutral; the only colour is a warm accent used sparingly for
+ * highlights. Solid buttons are ink — near-white on dark, near-black on light —
+ * which keeps them calm next to long-form prose instead of shouting over it.
+ */
 :root {
   color-scheme: dark;
 
-  --bg: #08090f;
-  --bg-elev: #101322;
-  --bg-elev-2: #171b2e;
-  --line: #262b45;
-  --line-soft: #1c2036;
-  --fg: #e9ecf8;
-  --fg-muted: #99a1c0;
-  --fg-dim: #6d7595;
-  --accent: #7f97ff;
-  --accent-soft: #5c74f51f;
-  --ring: #7f97ff66;
+  --bg: #0b0c0e;
+  --bg-elev: #141619;
+  --bg-elev-2: #1d2026;
+  --line: #2b2f36;
+  --line-soft: #1f2228;
+  --fg: #e9eaec;
+  --fg-muted: #9ba1aa;
+  --fg-dim: #6d737d;
 
-  --reader-bg: #0c0e18;
-  --reader-fg: #dfe4f5;
-  --reader-quiet: #7d86a8;
+  --accent: #e0a75e;
+  --accent-soft: #e0a75e1f;
+  --accent-line: #e0a75e59;
+  --ring: #e0a75e66;
+
+  --btn: #f2f3f5;
+  --btn-fg: #0b0c0e;
+  --btn-hover: #ffffff;
+
+  --reader-bg: #0c0d10;
+  --reader-fg: #dfe1e5;
+  --reader-quiet: #7d838d;
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: #f7f7f5;
+
+  --bg: #fbfaf9;
   --bg-elev: #ffffff;
-  --bg-elev-2: #f2f3f7;
-  --line: #e2e3ea;
-  --line-soft: #ececf1;
-  --fg: #14161f;
-  --fg-muted: #5c6178;
-  --fg-dim: #878ca3;
-  --accent: #4553d8;
-  --accent-soft: #4553d814;
-  --ring: #4553d855;
+  --bg-elev-2: #f3f1ef;
+  --line: #e4e1dd;
+  --line-soft: #eeecea;
+  --fg: #1a1917;
+  --fg-muted: #5f5b55;
+  --fg-dim: #8b867f;
+
+  --accent: #b5761f;
+  --accent-soft: #b5761f14;
+  --accent-line: #b5761f4d;
+  --ring: #b5761f55;
+
+  --btn: #1a1917;
+  --btn-fg: #fbfaf9;
+  --btn-hover: #000000;
 
   --reader-bg: #ffffff;
-  --reader-fg: #1a1c24;
-  --reader-quiet: #6b7086;
+  --reader-fg: #1c1b19;
+  --reader-quiet: #6e6963;
 }
 
 :root[data-theme="sepia"] {
   color-scheme: light;
+
   --bg: #efe6d6;
   --bg-elev: #fbf4e6;
-  --bg-elev-2: #f4ebda;
+  --bg-elev-2: #f2e8d6;
   --line: #ddd0b8;
-  --line-soft: #e7dbc6;
+  --line-soft: #e7dcc8;
   --fg: #2f2618;
   --fg-muted: #6a5b45;
   --fg-dim: #8b7b63;
+
   --accent: #9a5b1f;
   --accent-soft: #9a5b1f14;
+  --accent-line: #9a5b1f4d;
   --ring: #9a5b1f55;
+
+  --btn: #3a2e1c;
+  --btn-fg: #f7efdf;
+  --btn-hover: #2a2114;
 
   --reader-bg: #f7efdf;
   --reader-fg: #302716;
@@ -104,22 +108,28 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* Ambient background glow */
+/* Lucide draws at stroke-width 2, which is heavy at 14-18px. */
+svg.lucide {
+  stroke-width: 1.75;
+}
+
+/* A barely-there warm wash, not a light show. */
 .aurora::before {
   content: "";
   position: fixed;
-  inset: -30% -10% auto -10%;
-  height: 70vh;
+  inset: -20% -10% auto -10%;
+  height: 46vh;
   pointer-events: none;
   z-index: 0;
-  background:
-    radial-gradient(45rem 28rem at 18% 0%, color-mix(in oklab, var(--accent) 22%, transparent), transparent 70%),
-    radial-gradient(38rem 24rem at 82% 8%, #ff8f3c26, transparent 70%);
-  filter: blur(12px);
-  opacity: 0.9;
+  background: radial-gradient(
+    48rem 24rem at 50% 0%,
+    color-mix(in oklab, var(--accent) 9%, transparent),
+    transparent 72%
+  );
+  opacity: 0.7;
 }
 
-::selection { background: color-mix(in oklab, var(--accent) 35%, transparent); }
+::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
 
 /* Scrollbars */
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
@@ -136,7 +146,7 @@ body {
 :where(button, a, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 @keyframes rise {

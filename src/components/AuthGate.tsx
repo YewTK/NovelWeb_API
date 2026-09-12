@@ -52,7 +52,7 @@ export function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
     <main className="relative z-10 grid min-h-dvh place-items-center px-5 py-12">
       <div className="w-full max-w-[400px]">
         <div className="rise mb-8 text-center">
-          <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent)] text-[20px] font-semibold text-[#0a0c14]">
+          <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent)] text-[20px] font-semibold text-[var(--btn-fg)]">
             N
           </span>
           <h1 className="text-[26px] font-semibold tracking-tight">NovelFlow</h1>

@@ -480,6 +480,18 @@ export async function mergeIntoSeries(
   return merged;
 }
 
+/**
+ * Removes a whole novel: every chapter filed under it, then the shelf itself
+ * along with its glossary. There is no undo, so callers must confirm first.
+ */
+export async function deleteShelf(
+  seriesId: string,
+  chapterIds: string[],
+): Promise<void> {
+  for (const id of chapterIds) await deleteChapter(id);
+  if (seriesId) await deleteSeries(seriesId);
+}
+
 /** Renames a shelf — the handle the reader recognises the novel by. */
 export async function renameSeries(id: string, name: string): Promise<Series | undefined> {
   const found = await local.getSeries(id);
