@@ -216,14 +216,35 @@ export function BookPage({
           aria-hidden
         >
           <div className="mx-auto h-full max-w-[520px]">
-            <Cover name="" seed={series.key || series.id} className="h-full rounded-none shadow-none" />
+            <Cover name="" seed={series.key || series.id} image={info.cover} className="h-full rounded-none shadow-none" />
           </div>
         </div>
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[var(--bg)]/60 to-[var(--bg)]" aria-hidden />
 
         <div className="relative mx-auto flex max-w-[1080px] gap-4 px-4 pb-5 pt-6 sm:gap-7 sm:px-6 sm:pt-10">
           <div className="w-[112px] shrink-0 sm:w-[168px]">
-            <Cover name={series.name} seed={series.key || series.id} author={info.author} size="lg" />
+            {hasSeries ? (
+              <button
+                onClick={onEditInfo}
+                aria-label={info.cover ? "เปลี่ยนรูปปก" : "ใส่รูปปก"}
+                className="relative block w-full"
+              >
+                <Cover
+                  name={series.name}
+                  seed={series.key || series.id}
+                  author={info.author}
+                  image={info.cover}
+                  size="lg"
+                />
+                {!info.cover ? (
+                  <span className="absolute inset-x-2 bottom-2 rounded-md bg-black/55 py-1 text-center text-[11px] font-medium text-white backdrop-blur">
+                    + ใส่รูปปก
+                  </span>
+                ) : null}
+              </button>
+            ) : (
+              <Cover name={series.name} seed={series.key || series.id} size="lg" />
+            )}
           </div>
 
           <div className="min-w-0 flex-1">

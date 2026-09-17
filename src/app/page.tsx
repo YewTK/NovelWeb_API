@@ -473,7 +473,10 @@ export default function Page() {
       let novel: Series | null =
         seriesById(target.seriesId) ??
         (target.seriesId ? ((await getSeriesById(target.seriesId)) ?? null) : null);
-      const book = novel ? { name: novel.name, info: novel.info } : undefined;
+      // The cover image stays behind — it would ride along on every request.
+      const book = novel
+        ? { name: novel.name, info: novel.info ? { ...novel.info, cover: undefined } : undefined }
+        : undefined;
       const sources = target.paragraphs.map((p) => p.source);
 
       let working: Chapter = { ...target, status: "translating" };

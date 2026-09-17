@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { BookOpen, Library, Loader2, Play } from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
 import { chapterLabel, chapterNumber } from "@/lib/series";
@@ -84,16 +84,45 @@ export function Cover({
   name,
   seed,
   author,
+  image,
   className,
   size = "md",
 }: {
   name: string;
   seed: string;
   author?: string;
+  /** the reader's own cover; the generated one is the fallback */
+  image?: string;
   className?: string;
   size?: "sm" | "md" | "lg";
 }) {
   const hue = hueOf(seed || name);
+  const [broken, setBroken] = useState(false);
+  useEffect(() => setBroken(false), [image]);
+
+  if (image && !broken) {
+    return (
+      <div
+        className={cn(
+          "relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-[var(--bg-elev-2)] shadow-[0_8px_20px_-8px_rgba(0,0,0,.45)] ring-1 ring-black/5",
+          className,
+        )}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- data URLs and arbitrary hosts */}
+        <img
+          src={image}
+          alt={name ? `ปก ${name}` : ""}
+          loading="lazy"
+          decoding="async"
+          referrerPolicy="no-referrer"
+          draggable={false}
+          onError={() => setBroken(true)}
+          className="absolute inset-0 h-full w-full object-cover"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -225,6 +254,7 @@ export function ContinueReading({
                 <Cover
                   name={shelf.series.name}
                   seed={shelf.series.key || shelf.series.id}
+                  image={shelf.series.info?.cover}
                   size="sm"
                 />
               </div>
@@ -288,6 +318,7 @@ const BookCard = memo(function BookCard({
           name={shelf.series.name}
           seed={shelf.series.key || shelf.series.id}
           author={shelf.series.info?.author}
+          image={shelf.series.info?.cover}
         />
         {translating ? (
           <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-medium text-white backdrop-blur">

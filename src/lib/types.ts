@@ -83,6 +83,8 @@ export interface BookInfo {
    */
   translatorNotes?: string;
   sourceUrl?: string;
+  /** cover image: a small data URL uploaded by the reader, or an https link */
+  cover?: string;
 }
 
 export interface Series {
