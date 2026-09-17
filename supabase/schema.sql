@@ -132,3 +132,7 @@ begin
 
   raise notice 'ย้ายข้อมูลทั้งหมดเข้าบัญชี admin เรียบร้อย';
 end $$;
+
+
+/* ---- ข้อมูลหนังสือ (ผู้แต่ง แนว เรื่องย่อ โน้ตผู้แปล) — รันซ้ำได้ ---------- */
+alter table public.series add column if not exists info jsonb not null default '{}'::jsonb;

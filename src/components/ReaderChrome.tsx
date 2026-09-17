@@ -11,6 +11,7 @@ import {
   Copy,
   Download,
   Languages,
+  Loader2,
   MoreHorizontal,
   RefreshCw,
   SlidersHorizontal,
@@ -74,6 +75,7 @@ export function useReaderScroll(locked: boolean) {
 
 export function ReaderHeader({
   chapter,
+  seriesName,
   visible,
   busy,
   busyLabel,
@@ -87,6 +89,8 @@ export function ReaderHeader({
   onTypography,
 }: {
   chapter: Chapter;
+  /** the novel this chapter belongs to */
+  seriesName: string | null;
   visible: boolean;
   busy: boolean;
   busyLabel: string;
@@ -103,7 +107,7 @@ export function ReaderHeader({
   return (
     <header
       className={cn(
-        "fixed inset-x-0 top-0 z-30 border-b border-[var(--line-soft)]",
+        "fixed inset-x-0 top-0 z-30 border-b border-[var(--line-soft)] pt-[env(safe-area-inset-top)]",
         "bg-[var(--reader-bg)]/90 backdrop-blur-xl",
         "transition-transform duration-300 ease-out will-change-transform",
         !visible && "-translate-y-full",
@@ -122,13 +126,13 @@ export function ReaderHeader({
             {chapter.translatedTitle || chapter.title}
           </p>
           {busy ? (
-            <p className="flex items-center gap-1.5 text-[11.5px] text-[var(--accent)]">
+            <p className="flex min-w-0 items-center gap-1.5 truncate text-[11.5px] text-[var(--accent)]">
               <span className="dot-live inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]" />
               {busyLabel}
             </p>
           ) : (
             <p className="truncate text-[11.5px] text-[var(--fg-dim)]">
-              {chapter.siteName ?? "ข้อความที่วางไว้"}
+              {seriesName ?? chapter.siteName ?? "ข้อความที่วางไว้"}
             </p>
           )}
         </div>
@@ -211,7 +215,7 @@ function DockButton({
         "flex h-11 min-w-11 items-center justify-center gap-1.5 rounded-xl px-3",
         "text-[13px] font-medium tracking-tight transition-colors duration-150",
         "active:scale-[0.97] active:transition-transform",
-        "disabled:pointer-events-none disabled:opacity-30",
+        "disabled:pointer-events-none disabled:opacity-40",
         tone === "primary" &&
           "bg-[var(--btn)] px-4 text-[var(--btn-fg)] hover:bg-[var(--btn-hover)]",
         tone === "accent" &&
@@ -239,6 +243,7 @@ export function ReaderDock({
   width,
   hasPrev,
   nextMode,
+  fetchingNext = false,
   onTools,
   onFillGaps,
   onPrev,
@@ -259,6 +264,8 @@ export function ReaderDock({
    * "fetch"   — only the source site's link exists, so go and get it.
    */
   nextMode: "chapter" | "fetch" | "none";
+  /** the next chapter's page is being fetched right now */
+  fetchingNext?: boolean;
   onTools: () => void;
   onFillGaps: () => void;
   onPrev: () => void;
@@ -348,19 +355,30 @@ export function ReaderDock({
               />
             ) : null}
 
-            {!busy && nextMode !== "none" ? (
+            {nextMode !== "none" ? (
               <DockButton
                 onClick={onNext}
-                label={nextMode === "fetch" ? "ดึงตอนถัดไป" : "ตอนถัดไป"}
+                // Locked while the page is on its way, so a second tap can
+                // never fetch and translate the same chapter twice.
+                disabled={fetchingNext}
+                label={
+                  fetchingNext
+                    ? "กำลังดึงตอน…"
+                    : nextMode === "fetch"
+                      ? "ดึงตอนถัดไป"
+                      : "ตอนถัดไป"
+                }
                 icon={
-                  nextMode === "fetch" ? (
+                  fetchingNext ? (
+                    <Loader2 size={15} className="animate-spin" />
+                  ) : nextMode === "fetch" ? (
                     <DownloadCloud size={15} />
                   ) : (
                     <ChevronRight size={17} />
                   )
                 }
                 tone="primary"
-                iconAfter={nextMode !== "fetch"}
+                iconAfter={nextMode !== "fetch" && !fetchingNext}
               />
             ) : null}
           </div>

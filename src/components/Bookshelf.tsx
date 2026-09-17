@@ -1,26 +1,11 @@
 "use client";
 
-import { useState } from "react";
-import {
-  ArrowDownNarrowWide,
-  ArrowUpNarrowWide,
-  BookOpen,
-  BookOpenCheck,
-  Check,
-  ChevronRight,
-  FolderInput,
-  Languages,
-  Library,
-  ListPlus,
-  Trash2,
-} from "lucide-react";
+import { memo, useMemo, useState } from "react";
+import { BookOpen, Library, Loader2, Play } from "lucide-react";
 import type { Chapter, Series } from "@/lib/types";
 import { chapterLabel, chapterNumber } from "@/lib/series";
-import { useSettings } from "@/lib/store";
 import { statusOf, type ReadMark } from "@/lib/reading";
-import { cn, formatRelative } from "@/lib/utils";
-import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
-import { Button, ConfirmDialog, Sheet, useLongPress } from "./ui";
+import { cn } from "@/lib/utils";
 
 export interface Shelf {
   series: Series;
@@ -65,45 +50,94 @@ export function buildShelves(series: Series[], chapters: Chapter[]): Shelf[] {
   }
 
   // Reading order, not edit order: a shelf should read 1, 2, 3 like a book.
-  // Chapters whose number cannot be worked out sink to the bottom, newest first.
+  // Chapters whose number cannot be worked out keep the order they were added.
   for (const shelf of shelves) {
+    const numbers = new Map(shelf.chapters.map((c) => [c.id, chapterNumber(c)]));
     shelf.chapters.sort((a, b) => {
-      const na = chapterNumber(a);
-      const nb = chapterNumber(b);
-      if (na !== null && nb !== null) return na - nb;
-      if (na !== null) return -1;
-      if (nb !== null) return 1;
-      return b.updatedAt - a.updatedAt;
+      const na = numbers.get(a.id) ?? null;
+      const nb = numbers.get(b.id) ?? null;
+      if (na !== null && nb !== null && na !== nb) return na - nb;
+      if (na !== null && nb === null) return -1;
+      if (nb !== null && na === null) return 1;
+      return a.createdAt - b.createdAt;
     });
   }
   return shelves.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
-/** Gives every novel a stable colour so its spine is recognisable at a glance. */
-function hueOf(seed: string): number {
-  let h = 0;
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) % 360;
-  return h;
+/** Gives every novel a stable colour so its cover is recognisable at a glance. */
+export function hueOf(seed: string): number {
+  // FNV-1a, so near-identical keys still land on clearly different colours.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < seed.length; i++) {
+    h ^= seed.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0) % 360;
 }
 
-function Spine({ name, seed }: { name: string; seed: string }) {
+/**
+ * A generated book cover: the novel's own colour, its title set like a
+ * paperback, and a spine highlight. Sized by its parent.
+ */
+export function Cover({
+  name,
+  seed,
+  author,
+  className,
+  size = "md",
+}: {
+  name: string;
+  seed: string;
+  author?: string;
+  className?: string;
+  size?: "sm" | "md" | "lg";
+}) {
   const hue = hueOf(seed || name);
   return (
     <div
-      className="relative grid h-[74px] w-[52px] shrink-0 place-items-center overflow-hidden rounded-md shadow-md"
+      className={cn(
+        "relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-[0_8px_20px_-8px_rgba(0,0,0,.45)] ring-1 ring-black/5",
+        className,
+      )}
       style={{
-        background: `linear-gradient(160deg, hsl(${hue} 62% 58%), hsl(${(hue + 38) % 360} 58% 40%))`,
+        background: `linear-gradient(155deg, hsl(${hue} 55% 56%) 0%, hsl(${(hue + 30) % 360} 50% 38%) 60%, hsl(${(hue + 50) % 360} 45% 24%) 100%)`,
       }}
       aria-hidden
     >
-      <span className="absolute inset-y-0 left-[5px] w-px bg-white/25" />
-      <BookOpen size={18} className="text-white/85" />
+      <span className="absolute inset-y-0 left-0 w-[6%] bg-gradient-to-r from-black/25 to-white/10" />
+      <span className="absolute inset-x-[10%] top-[9%] h-px bg-white/35" />
+      <div
+        className={cn(
+          "absolute inset-x-[12%] top-[14%] font-serif font-semibold leading-snug text-white [text-shadow:0_1px_2px_rgba(0,0,0,.35)]",
+          size === "sm" && "line-clamp-4 text-[11px]",
+          size === "md" && "line-clamp-5 text-[13px] sm:text-[14px]",
+          size === "lg" && "line-clamp-5 text-[16px]",
+        )}
+      >
+        {name}
+      </div>
+      {author ? (
+        <div
+          className={cn(
+            "absolute inset-x-[12%] bottom-[9%] truncate text-white/80",
+            size === "sm" ? "text-[9px]" : "text-[11px]",
+          )}
+        >
+          {author}
+        </div>
+      ) : (
+        <BookOpen
+          className="absolute bottom-[9%] right-[12%] text-white/55"
+          size={size === "sm" ? 12 : 16}
+        />
+      )}
     </div>
   );
 }
 
 /** "ตอนที่ 1780–1782" across a whole shelf, or null when nothing is numbered. */
-function chapterRange(chapters: Chapter[]): string | null {
+export function chapterRange(chapters: Chapter[]): string | null {
   const numbers = chapters
     .map((c) => chapterNumber(c))
     .filter((n): n is number => n !== null);
@@ -113,59 +147,110 @@ function chapterRange(chapters: Chapter[]): string | null {
   return low === high ? `ตอนที่ ${low}` : `ตอนที่ ${low}–${high}`;
 }
 
-/* -------------------------------- the shelf ------------------------------- */
+export function readCount(shelf: Shelf, marks: Record<string, ReadMark>): number {
+  return shelf.chapters.filter((c) => statusOf(marks[c.id]) === "read").length;
+}
 
-export function Bookshelf({
+/** The chapter to resume a novel from: last opened, else the first unread. */
+export function resumeTarget(
+  shelf: Shelf,
+  marks: Record<string, ReadMark>,
+): { chapter: Chapter; started: boolean } | null {
+  if (!shelf.chapters.length) return null;
+  let latest: Chapter | null = null;
+  let at = 0;
+  for (const c of shelf.chapters) {
+    const opened = marks[c.id]?.openedAt ?? 0;
+    if (opened > at) {
+      at = opened;
+      latest = c;
+    }
+  }
+  if (latest) {
+    const mark = marks[latest.id];
+    // Finished that one — move on to the next chapter along.
+    if (mark?.finishedAt) {
+      const i = shelf.chapters.findIndex((c) => c.id === latest!.id);
+      const next = shelf.chapters[i + 1];
+      if (next) return { chapter: next, started: true };
+    }
+    return { chapter: latest, started: true };
+  }
+  return { chapter: shelf.chapters[0], started: false };
+}
+
+/* ----------------------------- continue reading ---------------------------- */
+
+export function ContinueReading({
   shelves,
-  onOpen,
+  marks,
+  onOpenChapter,
 }: {
   shelves: Shelf[];
-  onOpen: (shelf: Shelf) => void;
+  marks: Record<string, ReadMark>;
+  onOpenChapter: (id: string) => void;
 }) {
-  if (shelves.length === 0) return null;
+  const items = useMemo(() => {
+    return shelves
+      .map((shelf) => {
+        const target = resumeTarget(shelf, marks);
+        if (!target?.started) return null;
+        const lastOpened = Math.max(
+          ...shelf.chapters.map((c) => marks[c.id]?.openedAt ?? 0),
+        );
+        return { shelf, chapter: target.chapter, lastOpened };
+      })
+      .filter((x): x is NonNullable<typeof x> => Boolean(x))
+      .sort((a, b) => b.lastOpened - a.lastOpened)
+      .slice(0, 8);
+  }, [shelves, marks]);
+
+  if (!items.length) return null;
 
   return (
-    <section className="mx-auto w-full max-w-[680px] px-5 pb-24">
-      <h2 className="mb-3 flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-[var(--fg-dim)]">
-        <Library size={13} /> ชั้นหนังสือของฉัน
-      </h2>
-
-      <div className="grid gap-2 sm:grid-cols-2">
-        {shelves.map((shelf) => {
-          const done = shelf.chapters.filter((c) => c.status === "done").length;
-          const range = chapterRange(shelf.chapters);
+    <section className="mx-auto w-full max-w-[1080px] px-4 pb-8 sm:px-6">
+      <h2 className="mb-3 text-[17px] font-semibold tracking-tight">อ่านต่อ</h2>
+      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none] sm:-mx-6 sm:px-6 [&::-webkit-scrollbar]:hidden">
+        {items.map(({ shelf, chapter }) => {
+          const mark = marks[chapter.id];
+          const pct = Math.round((mark?.progress ?? 0) * 100);
+          const label = chapterLabel(chapterNumber(chapter));
           return (
             <button
               key={shelf.series.id || "orphans"}
-              onClick={() => onOpen(shelf)}
-              className="group flex items-center gap-3.5 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)]/60 p-3.5 text-left backdrop-blur transition-all hover:border-[var(--fg-dim)] hover:bg-[var(--bg-elev)]"
+              onClick={() => onOpenChapter(chapter.id)}
+              className="group flex w-[270px] shrink-0 snap-start items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-2.5 text-left transition-colors hover:border-[var(--fg-dim)]"
             >
-              <Spine name={shelf.series.name} seed={shelf.series.key} />
-
+              <div className="w-[52px] shrink-0">
+                <Cover
+                  name={shelf.series.name}
+                  seed={shelf.series.key || shelf.series.id}
+                  size="sm"
+                />
+              </div>
               <span className="min-w-0 flex-1">
-                <span className="line-clamp-2 text-[14px] font-medium leading-snug">
+                <span className="line-clamp-1 text-[14px] font-semibold">
                   {shelf.series.name}
                 </span>
-                <span className="mt-1.5 block text-[11.5px] text-[var(--fg-dim)]">
-                  {shelf.chapters.length} ตอน
-                  {range ? ` · ${range}` : ""}
-                  {done > 0 ? ` · แปลจบ ${done}` : ""}
+                <span className="mt-0.5 line-clamp-1 text-[12.5px] text-[var(--fg-muted)]">
+                  {label && !(chapter.translatedTitle || chapter.title).includes(label)
+                    ? `${label} · `
+                    : ""}
+                  {chapter.translatedTitle || chapter.title}
                 </span>
-                <span className="mt-0.5 block text-[11.5px] text-[var(--fg-dim)]">
-                  {formatRelative(shelf.updatedAt)}
-                </span>
-                {shelf.series.glossary.length > 0 ? (
-                  <span className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--accent)]">
-                    <Languages size={10} />
-                    {shelf.series.glossary.length} คำ
+                <span className="mt-2 flex items-center gap-2">
+                  <span className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--line)]">
+                    <span
+                      className="block h-full rounded-full bg-[var(--accent)]"
+                      style={{ width: `${pct}%` }}
+                    />
                   </span>
-                ) : null}
+                  <span className="text-[11px] tabular-nums text-[var(--fg-dim)]">{pct}%</span>
+                </span>
               </span>
-
-              <ChevronRight
-                size={16}
-                className="shrink-0 text-[var(--fg-dim)] transition-transform group-hover:translate-x-0.5"
-              />
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--accent-strong)] text-white transition-transform group-hover:scale-105">
+                <Play size={14} className="translate-x-px" fill="currentColor" />
+              </span>
             </button>
           );
         })}
@@ -174,288 +259,142 @@ export function Bookshelf({
   );
 }
 
-/* --------------------------------- a row ---------------------------------- */
+/* -------------------------------- the shelf ------------------------------- */
 
-function ChapterRow({
-  chapter,
-  mark,
-  current,
+type SortKey = "recent" | "name" | "chapters";
+
+const BookCard = memo(function BookCard({
+  shelf,
+  read,
+  translating,
   onOpen,
-  onAskDelete,
 }: {
-  chapter: Chapter;
-  mark: ReadMark | undefined;
-  /** The chapter the reader was last in, resumed on the next launch. */
-  current: boolean;
-  onOpen: () => void;
-  onAskDelete: () => void;
+  shelf: Shelf;
+  read: number;
+  translating: boolean;
+  onOpen: (id: string) => void;
 }) {
-  const press = useLongPress(onAskDelete);
-  const read = statusOf(mark);
-  const label = chapterLabel(chapterNumber(chapter));
+  const total = shelf.chapters.length;
+  const done = shelf.chapters.filter((c) => c.status === "done").length;
+  const pct = total ? Math.round((read / total) * 100) : 0;
 
   return (
     <button
-      {...press.handlers}
-      onClick={() => {
-        // The hold already opened the delete prompt; do not also open the chapter.
-        if (press.consumed()) return;
-        onOpen();
-      }}
-      className={cn(
-        "flex w-full select-none items-start gap-3 rounded-xl border p-3 text-left transition-all",
-        current
-          ? "border-[var(--accent)] bg-[var(--accent-soft)]"
-          : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
-      )}
+      onClick={() => onOpen(shelf.series.id)}
+      className="group block w-full text-left"
     >
-      <span className="min-w-0 flex-1">
-        <span className="mb-1 flex flex-wrap items-center gap-1.5">
-          {label ? (
-            <span className="rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[11px] font-semibold text-[var(--accent)]">
-              {label}
-            </span>
-          ) : null}
-
-          {current ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-[var(--btn)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--btn-fg)]">
-              <BookOpenCheck size={10} /> กำลังอ่าน
-            </span>
-          ) : read === "read" ? (
-            <span className="inline-flex items-center gap-1 rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10.5px] font-semibold text-emerald-400">
-              <Check size={10} /> อ่านแล้ว
-            </span>
-          ) : read === "reading" ? (
-            <span className="rounded-md bg-[var(--bg-elev-2)] px-1.5 py-0.5 text-[10.5px] font-medium text-[var(--fg-muted)]">
-              อ่านค้างไว้ {Math.round((mark?.progress ?? 0) * 100)}%
-            </span>
-          ) : null}
-        </span>
-
-        <span
-          className={cn(
-            "line-clamp-2 text-[13.5px] font-medium leading-snug",
-            read === "read" && !current && "text-[var(--fg-muted)]",
-          )}
-        >
-          {chapter.translatedTitle || chapter.title}
-        </span>
-
-        <span className="mt-1.5 flex flex-wrap items-center gap-x-2 text-[11.5px] text-[var(--fg-dim)]">
-          <span>{formatRelative(chapter.updatedAt)}</span>
-          <span
-            className={cn(
-              chapter.status === "done" && "text-emerald-400",
-              chapter.status === "error" && "text-red-400",
-              chapter.status === "translating" && "text-[var(--accent)]",
-            )}
-          >
-            ·{" "}
-            {chapter.status === "done"
-              ? "แปลจบแล้ว"
-              : chapter.status === "error"
-                ? "มีข้อผิดพลาด"
-                : `${Math.round(chapter.progress * 100)}%`}
+      <div className="relative transition-transform duration-200 group-hover:-translate-y-1">
+        <Cover
+          name={shelf.series.name}
+          seed={shelf.series.key || shelf.series.id}
+          author={shelf.series.info?.author}
+        />
+        {translating ? (
+          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-medium text-white backdrop-blur">
+            <Loader2 size={10} className="animate-spin" /> กำลังแปล
           </span>
-        </span>
-      </span>
+        ) : null}
+        {read > 0 ? (
+          <span className="absolute inset-x-0 bottom-0 h-1 overflow-hidden rounded-b-lg bg-black/30">
+            <span
+              className="block h-full bg-[var(--accent)]"
+              style={{ width: `${pct}%` }}
+            />
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-2 line-clamp-2 text-[13.5px] font-semibold leading-snug">
+        {shelf.series.name}
+      </p>
+      <p className="mt-0.5 text-[11.5px] text-[var(--fg-dim)]">
+        {total} ตอน
+        {done < total ? ` · แปลแล้ว ${done}` : ""}
+        {read > 0 ? ` · อ่าน ${read}` : ""}
+      </p>
     </button>
   );
-}
+});
 
-/* ---------------------------- one novel's shelf --------------------------- */
-
-export function ShelfSheet({
-  shelf,
+export function Bookshelf({
   shelves,
-  onClose,
-  onOpenChapter,
-  onOpenGlossary,
-  onDeleteChapter,
-  onMerge,
-  onQueueAll,
   marks,
-  currentId,
-  onDeleteShelf,
+  activeSeriesId,
+  onOpen,
 }: {
-  shelf: Shelf | null;
-  /** every other shelf, offered as a destination when merging */
   shelves: Shelf[];
-  onClose: () => void;
-  onOpenChapter: (id: string) => void;
-  onOpenGlossary: (series: Series) => void;
-  onDeleteChapter: (id: string) => void;
-  onMerge: (shelf: Shelf, targetId: string) => void;
-  onQueueAll: (chapters: Chapter[]) => void;
   marks: Record<string, ReadMark>;
-  /** Chapter the reader is part-way through, if any. */
-  currentId: string | null;
-  onDeleteShelf: (shelf: Shelf) => void;
+  /** novel whose chapter is being translated right now */
+  activeSeriesId: string | null;
+  onOpen: (seriesId: string) => void;
 }) {
-  const [merging, setMerging] = useState(false);
-  const [doomed, setDoomed] = useState<Chapter | null>(null);
-  const [killShelf, setKillShelf] = useState(false);
-  const { shelfOrder, setShelfOrder } = useSettings();
+  const [sort, setSort] = useState<SortKey>("recent");
+  const [query, setQuery] = useState("");
 
-  if (!shelf) return null;
+  const visible = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const list = needle
+      ? shelves.filter((s) =>
+          `${s.series.name} ${s.series.info?.originalTitle ?? ""} ${s.series.info?.author ?? ""}`
+            .toLowerCase()
+            .includes(needle),
+        )
+      : shelves;
+    if (sort === "name") return [...list].sort((a, b) => a.series.name.localeCompare(b.series.name, "th"));
+    if (sort === "chapters") return [...list].sort((a, b) => b.chapters.length - a.chapters.length);
+    return list;
+  }, [shelves, sort, query]);
 
-  const hasSeries = Boolean(shelf.series.id);
-  // buildShelves hands these over in reading order; flip for newest-first.
-  const ordered =
-    shelfOrder === "desc" ? [...shelf.chapters].reverse() : shelf.chapters;
-
-  // Anything not finished is worth offering as one batch.
-  const pending = shelf.chapters.filter((c) => c.status !== "done");
-  const targets: ShelfOption[] = shelves
-    .filter((s) => s.series.id && s.series.id !== shelf.series.id)
-    .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
+  if (shelves.length === 0) return null;
 
   return (
-    <Sheet
-      open
-      onClose={onClose}
-      title={shelf.series.name}
-      description={`${shelf.chapters.length} ตอนในเรื่องนี้`}
-    >
-      <div className="space-y-3">
-        {hasSeries ? (
-          <Button
-            variant="outline"
-            className="w-full justify-start"
-            onClick={() => onOpenGlossary(shelf.series)}
-          >
-            <Languages size={15} className="text-[var(--accent)]" />
-            <span className="flex-1 text-left">คลังคำศัพท์ของเรื่องนี้</span>
-            <span className="text-[12px] text-[var(--fg-dim)]">
-              {shelf.series.glossary.length} คำ
-            </span>
-          </Button>
-        ) : null}
-
-        {pending.length > 0 ? (
-          <Button
-            variant="outline"
-            className="w-full justify-start"
-            onClick={() => {
-              onQueueAll(pending);
-              onClose();
-            }}
-          >
-            <ListPlus size={15} className="text-[var(--accent)]" />
-            <span className="flex-1 text-left">แปลตอนที่ยังไม่เสร็จทั้งหมด</span>
-            <span className="text-[12px] text-[var(--fg-dim)]">
-              {pending.length} ตอน
-            </span>
-          </Button>
-        ) : null}
-
-        {targets.length > 0 ? (
-          <Button
-            variant="outline"
-            className="w-full justify-start"
-            onClick={() => setMerging(true)}
-          >
-            <FolderInput size={15} className="text-[var(--fg-muted)]" />
-            <span className="flex-1 text-left">รวมเข้ากับชั้นหนังสืออื่น</span>
-          </Button>
-        ) : null}
-
-        {hasSeries ? (
-          <Button
-            variant="outline"
-            className="w-full justify-start text-red-400 hover:border-red-500/40 hover:bg-red-500/10"
-            onClick={() => setKillShelf(true)}
-          >
-            <Trash2 size={15} />
-            <span className="flex-1 text-left">ลบชั้นหนังสือนี้</span>
-          </Button>
-        ) : null}
-
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <span className="text-[12px] font-semibold uppercase tracking-wider text-[var(--fg-dim)]">
-            รายตอน
+    <section className="mx-auto w-full max-w-[1080px] px-4 pb-28 sm:px-6">
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <h2 className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight">
+          <Library size={17} className="text-[var(--accent)]" /> ชั้นหนังสือของฉัน
+          <span className="text-[13px] font-normal text-[var(--fg-dim)]">
+            {shelves.length} เรื่อง
           </span>
-          <button
-            onClick={() => setShelfOrder(shelfOrder === "asc" ? "desc" : "asc")}
-            className="flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-[var(--bg)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--fg-muted)] transition-colors hover:border-[var(--fg-dim)] hover:text-[var(--fg)]"
+        </h2>
+        <div className="flex w-full items-center gap-2 sm:w-auto">
+          {shelves.length > 4 ? (
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="ค้นหาเรื่อง…"
+              type="search"
+              className="h-9 min-w-0 flex-1 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-3.5 text-base outline-none transition-colors placeholder:text-[var(--fg-dim)] focus:border-[var(--accent)] sm:w-48 sm:flex-none sm:text-[13px]"
+            />
+          ) : null}
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            aria-label="เรียงลำดับ"
+            className="h-9 shrink-0 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-3 text-[13px] outline-none"
           >
-            {shelfOrder === "asc" ? (
-              <ArrowUpNarrowWide size={13} />
-            ) : (
-              <ArrowDownNarrowWide size={13} />
-            )}
-            {shelfOrder === "asc" ? "ตอนแรกสุดก่อน" : "ตอนล่าสุดก่อน"}
-          </button>
+            <option value="recent">อัปเดตล่าสุด</option>
+            <option value="name">ชื่อเรื่อง</option>
+            <option value="chapters">จำนวนตอน</option>
+          </select>
         </div>
+      </div>
 
-        <div className="space-y-2">
-          {ordered.map((c) => (
-            <ChapterRow
-              key={c.id}
-              chapter={c}
-              mark={marks[c.id]}
-              current={c.id === currentId}
-              onOpen={() => {
-                onOpenChapter(c.id);
-                onClose();
-              }}
-              onAskDelete={() => setDoomed(c)}
+      {visible.length === 0 ? (
+        <p className="rounded-2xl border border-dashed border-[var(--line)] px-4 py-10 text-center text-[13px] text-[var(--fg-dim)]">
+          ไม่พบเรื่องที่ตรงกับ “{query.trim()}”
+        </p>
+      ) : (
+        <div className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-4 sm:gap-x-5 md:grid-cols-5 lg:grid-cols-6">
+          {visible.map((shelf) => (
+            <BookCard
+              key={shelf.series.id || "orphans"}
+              shelf={shelf}
+              read={readCount(shelf, marks)}
+              translating={activeSeriesId !== null && shelf.series.id === activeSeriesId}
+              onOpen={onOpen}
             />
           ))}
         </div>
-
-        <p className="px-1 pt-1 text-center text-[11.5px] text-[var(--fg-dim)]">
-          กดค้างที่ตอนเพื่อลบ
-        </p>
-      </div>
-
-      <ConfirmDialog
-        open={Boolean(doomed)}
-        title="ลบตอนนี้?"
-        confirmLabel="ลบ"
-        onCancel={() => setDoomed(null)}
-        onConfirm={() => {
-          if (doomed) onDeleteChapter(doomed.id);
-          setDoomed(null);
-        }}
-        body={
-          <p className="line-clamp-3 font-medium text-[var(--fg)]">
-            {doomed ? doomed.translatedTitle || doomed.title : ""}
-          </p>
-        }
-      />
-
-      <ConfirmDialog
-        open={killShelf}
-        title="ลบทั้งเรื่องนี้?"
-        confirmLabel="ลบทั้งหมด"
-        onCancel={() => setKillShelf(false)}
-        onConfirm={() => {
-          setKillShelf(false);
-          onDeleteShelf(shelf);
-          onClose();
-        }}
-        body={
-          <div className="space-y-2">
-            <p className="font-medium text-[var(--fg)]">{shelf.series.name}</p>
-            <p className="leading-relaxed">
-              จะลบทั้ง {shelf.chapters.length} ตอน และคลังคำศัพท์
-              {shelf.series.glossary.length} คำของเรื่องนี้ออกทั้งหมด
-              ทั้งในเครื่องและบนคลาวด์ — กู้คืนไม่ได้
-            </p>
-          </div>
-        }
-      />
-
-      <ShelfPicker
-        open={merging}
-        onClose={() => setMerging(false)}
-        options={targets}
-        selectedId={shelf.series.id}
-        onSelect={(id) => {
-          if (id) onMerge(shelf, id);
-        }}
-      />
-    </Sheet>
+      )}
+    </section>
   );
 }

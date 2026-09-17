@@ -27,10 +27,12 @@
   --fg-muted: #9ba1aa;
   --fg-dim: #6d737d;
 
-  --accent: #e0a75e;
-  --accent-soft: #e0a75e1f;
-  --accent-line: #e0a75e59;
-  --ring: #e0a75e66;
+  --accent: #ff6b6b;
+  /* solid fills that carry white text */
+  --accent-strong: #e5484d;
+  --accent-soft: #ff6b6b1f;
+  --accent-line: #ff6b6b59;
+  --ring: #ff6b6b66;
 
   --btn: #f2f3f5;
   --btn-fg: #0b0c0e;
@@ -53,10 +55,11 @@
   --fg-muted: #5f5b55;
   --fg-dim: #8b867f;
 
-  --accent: #b5761f;
-  --accent-soft: #b5761f14;
-  --accent-line: #b5761f4d;
-  --ring: #b5761f55;
+  --accent: #d63a44;
+  --accent-strong: #d63a44;
+  --accent-soft: #d63a4414;
+  --accent-line: #d63a444d;
+  --ring: #d63a4455;
 
   --btn: #1a1917;
   --btn-fg: #fbfaf9;
@@ -79,10 +82,11 @@
   --fg-muted: #6a5b45;
   --fg-dim: #8b7b63;
 
-  --accent: #9a5b1f;
-  --accent-soft: #9a5b1f14;
-  --accent-line: #9a5b1f4d;
-  --ring: #9a5b1f55;
+  --accent: #b23a39;
+  --accent-strong: #b23a39;
+  --accent-soft: #b23a3914;
+  --accent-line: #b23a394d;
+  --ring: #b23a3955;
 
   --btn: #3a2e1c;
   --btn-fg: #f7efdf;
@@ -101,6 +105,7 @@ html, body {
 
 body {
   background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
   color: var(--fg);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;

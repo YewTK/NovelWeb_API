@@ -67,12 +67,31 @@ export interface Chapter {
   seriesId: string;
 }
 
+/** Reference details about a novel, written by the reader — not by the AI. */
+export interface BookInfo {
+  /** name in the original language */
+  originalTitle?: string;
+  author?: string;
+  /** free-form tags, e.g. "แฟนตาซี", "กำลังภายใน" */
+  genres?: string[];
+  status?: "ongoing" | "completed" | "hiatus" | "";
+  sourceLanguage?: string;
+  synopsis?: string;
+  /**
+   * World and cast notes the translator should know: who is male/female,
+   * who speaks to whom how, the narrative voice. Fed into every prompt.
+   */
+  translatorNotes?: string;
+  sourceUrl?: string;
+}
+
 export interface Series {
   id: string;
   /** derived from the source site + novel slug; groups chapters of one novel */
   key: string;
   name: string;
   glossary: GlossaryEntry[];
+  info?: BookInfo;
   createdAt: number;
   updatedAt: number;
 }

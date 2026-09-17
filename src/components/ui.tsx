@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /* --------------------------------- Button -------------------------------- */
 
 type ButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "primary" | "accent" | "ghost" | "outline" | "subtle" | "danger";
+  variant?: "primary" | "accent" | "accent-solid" | "ghost" | "outline" | "subtle" | "danger";
   size?: "sm" | "md" | "lg" | "icon";
 };
 
@@ -31,6 +31,8 @@ export function Button({
         // Ink, not colour: a solid button should sit quietly beside prose.
         variant === "primary" &&
           "bg-[var(--btn)] text-[var(--btn-fg)] hover:bg-[var(--btn-hover)]",
+        variant === "accent-solid" &&
+          "bg-[var(--accent-strong)] text-white shadow-[0_8px_20px_-8px_var(--accent)] hover:brightness-110",
         variant === "accent" &&
           "border border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)] hover:bg-[color-mix(in_oklab,var(--accent)_16%,transparent)]",
         variant === "outline" &&
@@ -56,6 +58,8 @@ export function Sheet({
   description,
   children,
   side = "right",
+  header,
+  footer,
 }: {
   open: boolean;
   onClose: () => void;
@@ -63,6 +67,10 @@ export function Sheet({
   description?: string;
   children: ReactNode;
   side?: "right" | "bottom";
+  /** pinned under the title, outside the scrolling area (search, add row…) */
+  header?: ReactNode;
+  /** pinned to the bottom, outside the scrolling area */
+  footer?: ReactNode;
 }) {
   useEffect(() => {
     if (!open) return;
@@ -95,11 +103,16 @@ export function Sheet({
         className={cn(
           "rise relative z-10 flex flex-col bg-[var(--bg-elev)] shadow-2xl",
           side === "right"
-            ? "ml-auto h-full w-full max-w-[440px] border-l border-[var(--line)]"
-            : "mt-auto max-h-[88vh] w-full rounded-t-3xl border-t border-[var(--line)]",
+            ? "ml-auto h-dvh w-full max-w-[480px] border-l border-[var(--line)]"
+            : "mt-auto max-h-[88dvh] w-full rounded-t-3xl border-t border-[var(--line)]",
         )}
       >
-        <header className="flex items-start gap-3 border-b border-[var(--line-soft)] px-5 py-4">
+        <header
+          className={cn(
+            "flex items-start gap-3 border-b border-[var(--line-soft)] py-3.5 pl-4 pr-2 sm:pl-5",
+            side === "right" && "pt-[max(0.875rem,env(safe-area-inset-top))]",
+          )}
+        >
           <div className="min-w-0 flex-1">
             <h2 className="text-[15px] font-semibold tracking-tight">{title}</h2>
             {description ? (
@@ -112,9 +125,17 @@ export function Sheet({
             <X size={18} />
           </Button>
         </header>
-        <div className="flex-1 overflow-y-auto overscroll-contain px-5 py-5">
+        {header ? (
+          <div className="border-b border-[var(--line-soft)] px-4 py-3 sm:px-5">{header}</div>
+        ) : null}
+        <div className="flex-1 overflow-y-auto overscroll-contain px-4 py-5 [-webkit-overflow-scrolling:touch] sm:px-5">
           {children}
         </div>
+        {footer ? (
+          <div className="border-t border-[var(--line-soft)] px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -153,7 +174,9 @@ export function Field({
 
 export const inputClass =
   "w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5 text-sm " +
-  "placeholder:text-[var(--fg-dim)] transition-colors focus:border-[var(--accent)] focus:outline-none";
+  "placeholder:text-[var(--fg-dim)] transition-colors focus:border-[var(--accent)] focus:outline-none " +
+  // 16px on phones stops iOS Safari zooming the page on focus.
+  "max-sm:text-base";
 
 /* -------------------------------- Segmented ------------------------------ */
 

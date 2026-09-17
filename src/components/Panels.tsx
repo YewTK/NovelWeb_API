@@ -8,13 +8,10 @@ import {
   CloudOff,
   Loader2,
   LogOut,
-  Plus,
-  Search,
   RefreshCw,
   Trash2,
-  X,
 } from "lucide-react";
-import type { Chapter, GlossaryEntry } from "@/lib/types";
+import type { Chapter } from "@/lib/types";
 import { useSettings, type ReaderPrefs, type ThemeName } from "@/lib/store";
 import { cn, formatRelative, hostOf } from "@/lib/utils";
 import {
@@ -25,7 +22,7 @@ import {
   subscribeCloud,
   type CloudStatus,
 } from "@/lib/repo";
-import { Button, Field, Segmented, Sheet, Slider, Switch, inputClass } from "./ui";
+import { Button, Field, Segmented, Sheet, Slider, Switch } from "./ui";
 
 /* ------------------------------- Typography ------------------------------ */
 
@@ -140,177 +137,6 @@ export function TypographySheet({
           label="แสดงต้นฉบับควบคู่"
           hint="เทียบทีละย่อหน้าเพื่อตรวจงานแปล"
         />
-      </div>
-    </Sheet>
-  );
-}
-
-/* -------------------------------- Glossary ------------------------------- */
-
-export function GlossarySheet({
-  open,
-  onClose,
-  glossary,
-  seriesName,
-  onChange,
-  onRetranslate,
-}: {
-  open: boolean;
-  onClose: () => void;
-  glossary: GlossaryEntry[];
-  seriesName: string | null;
-  onChange: (next: GlossaryEntry[]) => void;
-  onRetranslate: () => void;
-}) {
-  const [dirty, setDirty] = useState(false);
-  const [query, setQuery] = useState("");
-
-  // Rows keep the index they hold in the real glossary, so editing a filtered
-  // row still writes to the right entry.
-  const needle = query.trim().toLowerCase();
-  const rows = glossary
-    .map((entry, index) => ({ entry, index }))
-    .filter(({ entry }) =>
-      needle
-        ? `${entry.source} ${entry.target} ${entry.note ?? ""}`
-            .toLowerCase()
-            .includes(needle)
-        : true,
-    );
-
-  const update = (i: number, patch: Partial<GlossaryEntry>) => {
-    const next = glossary.map((g, idx) => (idx === i ? { ...g, ...patch } : g));
-    onChange(next);
-    setDirty(true);
-  };
-
-  const remove = (i: number) => {
-    onChange(glossary.filter((_, idx) => idx !== i));
-    setDirty(true);
-  };
-
-  const add = () => {
-    onChange([...glossary, { source: "", target: "", note: "" }]);
-    setQuery("");
-    setDirty(true);
-  };
-
-  return (
-    <Sheet
-      open={open}
-      onClose={onClose}
-      title="คลังคำศัพท์ของเรื่องนี้"
-      description="ใช้ร่วมกันทุกตอนของนิยายเรื่องเดียวกัน — ชื่อตัวละคร สถานที่ ท่าไม้ตาย จะถูกแปลเหมือนเดิมเสมอ"
-    >
-      <div className="space-y-3">
-        {seriesName ? (
-          <div className="flex items-center gap-2.5 rounded-xl border border-[var(--line)] bg-[var(--bg)] px-3.5 py-2.5">
-            <BookOpen size={15} className="shrink-0 text-[var(--accent)]" />
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13.5px] font-medium">
-                {seriesName}
-              </span>
-              <span className="text-[11.5px] text-[var(--fg-dim)]">
-                {glossary.length} คำที่ล็อกไว้ทั้งเรื่อง
-              </span>
-            </span>
-          </div>
-        ) : null}
-
-        {glossary.length > 0 ? (
-          <div className="relative">
-            <Search
-              size={15}
-              className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-dim)]"
-            />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="ค้นหาคำศัพท์ที่จะแก้ไข…"
-              spellCheck={false}
-              className="h-11 w-full rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-9 pr-9 text-[13.5px] outline-none transition-colors placeholder:text-[var(--fg-dim)] focus:border-[var(--accent)]"
-            />
-            {query ? (
-              <button
-                onClick={() => setQuery("")}
-                aria-label="ล้างคำค้น"
-                className="absolute right-1.5 top-1/2 grid h-8 w-8 -translate-y-1/2 place-items-center rounded-lg text-[var(--fg-dim)] transition-colors hover:bg-[var(--bg-elev-2)] hover:text-[var(--fg)]"
-              >
-                <X size={14} />
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
-        {needle ? (
-          <p className="px-1 text-[12px] text-[var(--fg-dim)]">
-            พบ {rows.length} จาก {glossary.length} คำ
-          </p>
-        ) : null}
-
-        {glossary.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] text-[var(--fg-dim)]">
-            ยังไม่มีคำศัพท์ — ระบบจะดึงให้อัตโนมัติเมื่อเริ่มแปล
-            และจะสะสมเพิ่มขึ้นเรื่อย ๆ ทุกตอนที่แปล
-          </p>
-        ) : rows.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-[var(--line)] px-4 py-8 text-center text-[13px] text-[var(--fg-dim)]">
-            ไม่พบคำที่ตรงกับ “{query.trim()}”
-          </p>
-        ) : (
-          rows.map(({ entry: g, index: i }) => (
-            <div
-              key={i}
-              className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-2.5"
-            >
-              <div className="flex items-center gap-2">
-                <input
-                  value={g.source}
-                  onChange={(e) => update(i, { source: e.target.value })}
-                  placeholder="ต้นฉบับ"
-                  className="min-w-0 flex-1 rounded-lg bg-[var(--bg-elev-2)] px-2.5 py-1.5 text-[13px] outline-none"
-                />
-                <span className="shrink-0 text-[var(--fg-dim)]">→</span>
-                <input
-                  value={g.target}
-                  onChange={(e) => update(i, { target: e.target.value })}
-                  placeholder="คำแปล"
-                  className="min-w-0 flex-1 rounded-lg bg-[var(--bg-elev-2)] px-2.5 py-1.5 text-[13px] outline-none"
-                />
-                <button
-                  onClick={() => remove(i)}
-                  aria-label="ลบคำนี้"
-                  className="shrink-0 rounded-lg p-1.5 text-[var(--fg-dim)] transition-colors hover:bg-red-500/10 hover:text-red-400"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-              {g.note ? (
-                <p className="mt-1.5 px-1 text-[11.5px] text-[var(--fg-dim)]">
-                  {g.note}
-                </p>
-              ) : null}
-            </div>
-          ))
-        )}
-
-        <Button variant="outline" className="w-full" onClick={add}>
-          <Plus size={15} /> เพิ่มคำศัพท์
-        </Button>
-
-        {dirty ? (
-          <Button
-            variant="primary"
-            className="w-full"
-            onClick={() => {
-              setDirty(false);
-              onClose();
-              onRetranslate();
-            }}
-          >
-            <RefreshCw size={15} /> แปลตอนนี้ใหม่ด้วยคำศัพท์ชุดนี้
-          </Button>
-        ) : null}
       </div>
     </Sheet>
   );

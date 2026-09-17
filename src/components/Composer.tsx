@@ -20,6 +20,7 @@ import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button } from "./ui";
 
 export function Composer({
+  compact = false,
   busy,
   busyLabel,
   onSubmit,
@@ -29,6 +30,8 @@ export function Composer({
   onShelfChange,
   onImportPdf,
 }: {
+  /** the reader already has a bookshelf — keep the box, drop the welcome hero */
+  compact?: boolean;
   busy: boolean;
   busyLabel: string;
   onSubmit: (input: string, kind: "url" | "text") => void;
@@ -86,8 +89,18 @@ export function Composer({
   const shelf = shelves.find((s) => s.series.id === shelfId) ?? null;
 
   return (
-    <div className="mx-auto w-full max-w-[680px] px-5 pb-16 pt-[14vh] sm:pt-[16vh]">
-      <div className="rise mb-9 text-center">
+    <div
+      className={cn(
+        "mx-auto w-full max-w-[680px] px-4 sm:px-5",
+        compact ? "pb-8 pt-5 sm:pt-8" : "pb-16 pt-[10vh] sm:pt-[14vh]",
+      )}
+    >
+      {compact ? (
+        <p className="mb-2.5 px-1 text-[13px] font-medium text-[var(--fg-muted)]">
+          เพิ่มตอนใหม่ — วางลิงก์หรือเนื้อหา
+        </p>
+      ) : null}
+      <div className={cn("rise mb-9 text-center", compact && "hidden")}>
         <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg-elev)]/70 px-3.5 py-1.5 text-[12px] text-[var(--fg-muted)] backdrop-blur">
           <Sparkles size={12} className="text-[var(--accent)]" />
           แปลด้วย AI ผ่าน API Key ของคุณเอง
@@ -140,7 +153,8 @@ export function Composer({
             rows={1}
             spellCheck={false}
             placeholder="https://example.com/novel/chapter-1 หรือวางเนื้อหาทั้งตอนตรงนี้…"
-            className="w-full resize-none bg-transparent text-[15px] leading-relaxed outline-none placeholder:text-[var(--fg-dim)]"
+            className="w-full resize-none bg-transparent text-base leading-relaxed outline-none placeholder:text-[var(--fg-dim)] sm:text-[15px]"
+            enterKeyHint={kind === "url" ? "go" : "enter"}
           />
 
           <div className="mt-3 flex items-center gap-2">

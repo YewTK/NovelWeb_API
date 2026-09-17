@@ -64,3 +64,20 @@ export function hostOf(url: string): string {
     return url;
   }
 }
+
+/**
+ * Identity of a chapter link for duplicate checks: no scheme, no "www.", no
+ * fragment, no trailing slash, and none of the tracking parameters sites add.
+ */
+export function urlKey(url: string): string {
+  try {
+    const u = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
+    for (const p of [...u.searchParams.keys()]) {
+      if (/^(utm_|fbclid|gclid|ref$|source$)/i.test(p)) u.searchParams.delete(p);
+    }
+    const query = u.searchParams.toString();
+    return `${u.hostname.replace(/^www\./, "").toLowerCase()}${u.pathname.replace(/\/+$/, "")}${query ? `?${query}` : ""}`;
+  } catch {
+    return url.trim().replace(/\/+$/, "").toLowerCase();
+  }
+}

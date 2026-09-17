@@ -3,14 +3,12 @@
 import { useEffect, useState } from "react";
 import {
   Check,
-  ExternalLink,
-  Eye,
-  EyeOff,
   Loader2,
   RefreshCw,
   Search,
   Sparkles,
 } from "lucide-react";
+import { KeyList } from "./KeyList";
 import { PROVIDERS, TARGET_LANGUAGES, providerMeta } from "@/lib/models";
 import { useSettings } from "@/lib/store";
 import type { ProviderId, StyleSettings } from "@/lib/types";
@@ -32,7 +30,6 @@ export function SettingsSheet({
 }) {
   const { config, style, setConfig, setStyle, autoNext, setAutoNext } =
     useSettings();
-  const [showKey, setShowKey] = useState(false);
   const [remote, setRemote] = useState<RemoteModel[]>([]);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -49,7 +46,7 @@ export function SettingsSheet({
 
   const pickProvider = (id: ProviderId) => {
     const next = providerMeta(id);
-    setConfig({ provider: id, model: next.models[0].id, apiKey: "" });
+    setConfig({ provider: id, model: next.models[0].id });
   };
 
   const fetchModels = async () => {
@@ -114,38 +111,12 @@ export function SettingsSheet({
             ))}
           </div>
 
-          <Field
+          <KeyList
+            provider={config.provider}
             label={meta.keyLabel}
-            hint={
-              <a
-                href={meta.keyHelpUrl}
-                target="_blank"
-                rel="noreferrer noopener"
-                className="inline-flex items-center gap-1 text-[var(--accent)] hover:underline"
-              >
-                ขอ API Key ที่นี่ <ExternalLink size={11} />
-              </a>
-            }
-            action={
-              <button
-                onClick={() => setShowKey((v) => !v)}
-                className="text-[var(--fg-dim)] transition-colors hover:text-[var(--fg)]"
-                aria-label={showKey ? "ซ่อนคีย์" : "แสดงคีย์"}
-              >
-                {showKey ? <EyeOff size={14} /> : <Eye size={14} />}
-              </button>
-            }
-          >
-            <input
-              type={showKey ? "text" : "password"}
-              value={config.apiKey}
-              onChange={(e) => setConfig({ apiKey: e.target.value.trim() })}
-              placeholder={meta.keyPlaceholder}
-              autoComplete="off"
-              spellCheck={false}
-              className={cn(inputClass, "font-mono text-[13px]")}
-            />
-          </Field>
+            placeholder={meta.keyPlaceholder}
+            helpUrl={meta.keyHelpUrl}
+          />
 
           {meta.needsBaseUrl && (
             <Field

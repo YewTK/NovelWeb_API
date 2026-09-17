@@ -2,7 +2,7 @@
 
 import * as local from "./db";
 import { cloudConfigured, supabase } from "./supabase";
-import type { Chapter, Paragraph, GlossaryEntry, Series } from "./types";
+import type { BookInfo, Chapter, Paragraph, GlossaryEntry, Series } from "./types";
 import { nameKey, type SeriesRef } from "./series";
 import { mergeGlossary } from "./glossary";
 import {
@@ -224,19 +224,26 @@ export async function pullChapters(): Promise<Chapter[]> {
   const sb = supabase();
   if (!sb || !userId) return local.listChapters();
 
-  const { data, error } = await sb
-    .from("chapters")
-    .select("*")
-    .order("updated_at", { ascending: false })
-    .limit(300);
+  // Paged, so a long novel is never cut off at an arbitrary row count.
+  const PAGE = 100;
+  const rows: Row[] = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await sb
+      .from("chapters")
+      .select("*")
+      .order("updated_at", { ascending: false })
+      .range(from, from + PAGE - 1);
 
-  if (error) {
-    status = "offline";
-    emit();
-    return local.listChapters();
+    if (error) {
+      status = "offline";
+      emit();
+      return local.listChapters();
+    }
+    rows.push(...(data as Row[]));
+    if (data.length < PAGE) break;
   }
 
-  const remote = (data as Row[]).map(rowToChapter);
+  const remote = rows.map(rowToChapter);
   const localList = await local.listChapters();
   const byId = new Map(localList.map((c) => [c.id, c]));
 
@@ -316,11 +323,7 @@ export async function pushAllLocal(): Promise<number> {
 
   // Shelves go first so the chapters that point at them never land orphaned.
   const novels = await local.listSeries();
-  if (novels.length) {
-    await sb
-      .from("series")
-      .upsert(novels.map((n) => seriesToRow(n, owner)), { onConflict: "id" });
-  }
+  if (novels.length) await upsertSeries(novels, owner);
 
   const all = await local.listChapters();
   if (!all.length) return 0;
@@ -337,6 +340,7 @@ interface SeriesRow {
   key: string;
   name: string;
   glossary: GlossaryEntry[];
+  info?: BookInfo | null;
   created_at: string;
   updated_at: string;
 }
@@ -347,10 +351,18 @@ function rowToSeries(r: SeriesRow): Series {
     key: r.key ?? "",
     name: r.name,
     glossary: Array.isArray(r.glossary) ? r.glossary : [],
+    info: r.info && typeof r.info === "object" ? r.info : undefined,
     createdAt: new Date(r.created_at).getTime(),
     updatedAt: new Date(r.updated_at).getTime(),
   };
 }
+
+/**
+ * Book details live in a series.info column added after launch. Until the
+ * owner re-runs schema.sql the column is missing, so writes fall back to the
+ * old shape and the details stay on this device instead of failing the sync.
+ */
+let infoColumn = true;
 
 function seriesToRow(s: Series, owner: string) {
   return {
@@ -359,7 +371,22 @@ function seriesToRow(s: Series, owner: string) {
     key: s.key,
     name: s.name,
     glossary: s.glossary,
+    ...(infoColumn ? { info: s.info ?? {} } : {}),
   };
+}
+
+async function upsertSeries(list: Series[], owner: string): Promise<void> {
+  const sb = supabase();
+  if (!sb) return;
+  const { error } = await sb
+    .from("series")
+    .upsert(list.map((n) => seriesToRow(n, owner)), { onConflict: "id" });
+  if (error && infoColumn && /info/i.test(error.message ?? "")) {
+    infoColumn = false;
+    await sb
+      .from("series")
+      .upsert(list.map((n) => seriesToRow(n, owner)), { onConflict: "id" });
+  }
 }
 
 /** Mirrors the cloud series list into the local cache (newest wins). */
@@ -371,7 +398,7 @@ export async function pullSeries(): Promise<Series[]> {
     .from("series")
     .select("*")
     .order("updated_at", { ascending: false })
-    .limit(200);
+    .limit(1000);
 
   if (error) return local.listSeries();
 
@@ -382,17 +409,18 @@ export async function pullSeries(): Promise<Series[]> {
   for (const r of remote) {
     const existing = byId.get(r.id);
     if (!existing || r.updatedAt > existing.updatedAt) {
-      byId.set(r.id, r);
-      await local.saveSeries(r);
+      // Without the cloud column, keep the details this device already has.
+      const merged = r.info ? r : { ...r, info: existing?.info };
+      byId.set(r.id, merged);
+      await local.saveSeries(merged);
     }
   }
   return [...byId.values()];
 }
 
 async function pushSeries(series: Series): Promise<void> {
-  const sb = supabase();
-  if (!sb || !userId) return;
-  await sb.from("series").upsert(seriesToRow(series, userId), { onConflict: "id" });
+  if (!userId) return;
+  await upsertSeries([series], userId);
 }
 
 /**

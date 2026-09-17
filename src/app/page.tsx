@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { BookMarked, Loader2, Settings2, StopCircle, UserRound } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { History, Loader2, Moon, ScrollText, Settings2, StopCircle, Sun } from "lucide-react";
 import { Composer } from "@/components/Composer";
 import {
   Bookshelf,
-  ShelfSheet,
+  ContinueReading,
   buildShelves,
   type Shelf,
 } from "@/components/Bookshelf";
+import { BookPage } from "@/components/BookPage";
+import { BookInfoSheet, type BookDraft } from "@/components/BookInfoSheet";
+import { GlossarySheet } from "@/components/GlossarySheet";
 import type { ShelfOption } from "@/components/ShelfPicker";
 import { AuthGate } from "@/components/AuthGate";
 import { PdfImport, type PdfImportResult } from "@/components/PdfImport";
@@ -22,7 +25,6 @@ import {
 import { SettingsSheet } from "@/components/SettingsSheet";
 import {
   AccountSheet,
-  GlossarySheet,
   LibrarySheet,
   TypographySheet,
   useCloudState,
@@ -47,8 +49,8 @@ import {
   saveSeries,
 } from "@/lib/repo";
 import { deriveSeries } from "@/lib/series";
-import { cleanGlossary, mergeGlossary } from "@/lib/glossary";
-import { useSettings } from "@/lib/store";
+import { cleanGlossary, mergeGlossary, relevantGlossary } from "@/lib/glossary";
+import { keysFor, rpmFor, useSettings, type ThemeName } from "@/lib/store";
 import {
   clearCurrent,
   forgetChapter,
@@ -58,19 +60,18 @@ import {
   saveReading,
   type ReadingState,
 } from "@/lib/reading";
-import { runGlossaryPass, runTranslation } from "@/lib/translator";
-import type {
-  Chapter,
-  ExtractResult,
-  GlossaryEntry,
-  Series,
-} from "@/lib/types";
-import { cn, normalizeUrl } from "@/lib/utils";
+import { runGlossaryPass, runTranslation, type KeyRing } from "@/lib/translator";
+import type { Chapter, ExtractResult, GlossaryEntry, Series } from "@/lib/types";
+import { normalizeUrl, urlKey } from "@/lib/utils";
 
-type Phase = "idle" | "extracting" | "preparing" | "translating";
+/** Where the translation job is. Fetching a page is tracked separately. */
+type Phase = "idle" | "preparing" | "translating";
 
 /** Stops an auto-follow chain from quietly spending a whole API budget. */
 const AUTO_NEXT_LIMIT = 50;
+
+/** Shelf id used for chapters that belong to no novel. */
+const ORPHANS = "__orphans";
 
 interface QueueItem {
   id: string;
@@ -78,25 +79,44 @@ interface QueueItem {
   opts?: { skipDone?: boolean; skipGlossary?: boolean };
 }
 
+interface StartOptions {
+  /** file the chapter under this novel instead of guessing from the link */
+  seriesId?: string;
+  /** jump straight into the new chapter — the reader pressed "next" */
+  openAfter?: boolean;
+}
+
 const PHASE_LABEL: Record<Phase, string> = {
   idle: "",
-  extracting: "กำลังดึงเนื้อหา…",
   preparing: "กำลังจับคำศัพท์…",
   translating: "กำลังแปล…",
 };
 
+/** Snapshot of the provider settings at the moment a request goes out. */
+function currentRing(): KeyRing {
+  const s = useSettings.getState();
+  return { config: s.config, keys: keysFor(s), rpm: rpmFor(s) };
+}
+
 export default function Page() {
-  const { config, style, reader, theme, setReader, autoNext } = useSettings();
+  const { reader, theme, setTheme, setReader } = useSettings();
+  const hasKey = useSettings((s) => keysFor(s).length > 0);
   const { toasts, push } = useToasts();
   const cloud = useCloudState();
 
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [library, setLibrary] = useState<Chapter[]>([]);
   const [phase, setPhase] = useState<Phase>("idle");
+  /** links currently being fetched from their source site */
+  const [fetching, setFetching] = useState(0);
   const [progress, setProgress] = useState(0);
+  /** transient status from the translator, e.g. waiting out a rate limit */
+  const [notice, setNotice] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
   /** Identifies the running translation so the UI can report it from anywhere. */
-  const [job, setJob] = useState<{ id: string; title: string } | null>(null);
+  const [job, setJob] = useState<{ id: string; title: string; seriesId: string } | null>(
+    null,
+  );
   /** Chapters waiting their turn; they are translated one at a time, in order. */
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [showPdf, setShowPdf] = useState(false);
@@ -109,21 +129,26 @@ export default function Page() {
   const [showLibrary, setShowLibrary] = useState(false);
   const [showAccount, setShowAccount] = useState(false);
   const [showTools, setShowTools] = useState(false);
-  const [confirm, setConfirm] = useState<{ draft: Chapter; estimate: Estimate } | null>(
-    null,
-  );
+  const [confirm, setConfirm] = useState<{
+    draft: Chapter;
+    estimate: Estimate;
+    openAfter: boolean;
+  } | null>(null);
 
-  const [series, setSeries] = useState<Series | null>(null);
   const [allSeries, setAllSeries] = useState<Series[]>([]);
-  const [openShelf, setOpenShelf] = useState<Shelf | null>(null);
-  const [glossarySeries, setGlossarySeries] = useState<Series | null>(null);
+  /** The novel page on screen, if any. */
+  const [bookId, setBookId] = useState<string | null>(null);
+  const [glossarySeriesId, setGlossarySeriesId] = useState<string | null>(null);
+  const [infoSeriesId, setInfoSeriesId] = useState<string | null>(null);
   /** Shelf the reader pinned by hand; "" lets the link decide. */
   const [shelfId, setShelfId] = useState("");
 
   const chapterRef = useRef<Chapter | null>(null);
+  const bookIdRef = useRef<string | null>(null);
+  const libraryRef = useRef<Chapter[]>([]);
+  const allSeriesRef = useRef<Series[]>([]);
   /** The chapter currently being translated — not necessarily the one on screen. */
   const jobRef = useRef<Chapter | null>(null);
-  const seriesRef = useRef<Series | null>(null);
   const glossaryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const buffered = useRef(new Map<number, string>());
@@ -131,18 +156,32 @@ export default function Page() {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const queueRef = useRef<QueueItem[]>([]);
   const runningRef = useRef(false);
+  /** Links being fetched right now — a second tap on "next" must not fetch twice. */
+  const inflight = useRef(new Set<string>());
   /** Breaks the translate -> start -> queue -> translate dependency cycle. */
   const continueRef = useRef<((url: string, seriesId: string) => void) | null>(null);
   const autoChainRef = useRef(0);
   const readingRef = useRef<ReadingState>({ marks: {}, current: null });
   const readingSave = useRef<ReturnType<typeof setTimeout> | null>(null);
   const restored = useRef(false);
+  const scrollMemo = useRef<{ home: number; book: number }>({ home: 0, book: 0 });
 
   chapterRef.current = chapter;
-  const busy = phase !== "idle";
+  bookIdRef.current = bookId;
+  libraryRef.current = library;
+  allSeriesRef.current = allSeries;
+
+  const translatingNow = phase !== "idle";
+  const busy = translatingNow || fetching > 0;
   /** True only when the chapter on screen is the one being translated. */
   const viewingJob = Boolean(chapter && job && chapter.id === job.id);
   const chrome = useReaderScroll(viewingJob);
+
+  const seriesById = useCallback(
+    (id: string | null | undefined) =>
+      id ? allSeriesRef.current.find((s) => s.id === id) ?? null : null,
+    [],
+  );
 
   /* ------------------------------- bootstrap ------------------------------ */
 
@@ -166,6 +205,73 @@ export default function Page() {
     }, 700);
   }, []);
 
+  /* ------------------------------ navigation ------------------------------ */
+
+  /**
+   * The novel page and the reader each take a history entry, so the phone's
+   * back gesture steps out of them instead of leaving the site.
+   */
+  const pushLayer = (layer: "book" | "read") => {
+    try {
+      window.history.pushState({ nf: layer }, "");
+    } catch {
+      /* sandboxed iframe */
+    }
+  };
+
+  const leaveChapter = useCallback(() => {
+    commitReading(clearCurrent(readingRef.current), true);
+    setChapter(null);
+    const y = bookIdRef.current ? scrollMemo.current.book : scrollMemo.current.home;
+    requestAnimationFrame(() => window.scrollTo({ top: y }));
+  }, [commitReading]);
+
+  const leaveBook = useCallback(() => {
+    setBookId(null);
+    requestAnimationFrame(() => window.scrollTo({ top: scrollMemo.current.home }));
+  }, []);
+
+  useEffect(() => {
+    const onPop = () => {
+      if (chapterRef.current) leaveChapter();
+      else if (bookIdRef.current) leaveBook();
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [leaveChapter, leaveBook]);
+
+  /** On-screen back buttons walk the same history the gesture does. */
+  const goBack = (fallback: () => void) => {
+    if ((window.history.state as { nf?: string } | null)?.nf) window.history.back();
+    else fallback();
+  };
+
+  const openBook = (id: string) => {
+    scrollMemo.current.home = window.scrollY;
+    setBookId(id || ORPHANS);
+    pushLayer("book");
+    window.scrollTo({ top: 0 });
+  };
+
+  const openChapter = useCallback(
+    async (id: string) => {
+      const found = await getChapter(id);
+      if (!found) return;
+      // Moving between chapters swaps the page in place; entering the reader
+      // from outside adds a history entry to come back to.
+      if (!chapterRef.current) {
+        if (bookIdRef.current) scrollMemo.current.book = window.scrollY;
+        else scrollMemo.current.home = window.scrollY;
+        pushLayer("read");
+      }
+      setChapter(found);
+      setProgress(found.progress);
+      commitReading(openChapterMark(readingRef.current, id), true);
+      window.scrollTo({ top: 0 });
+    },
+    [commitReading],
+  );
+
   /** Pulls this reader's library down and shows what was inherited, if anything. */
   const loadLibrary = useCallback(async () => {
     await refreshShelves();
@@ -187,10 +293,7 @@ export default function Page() {
       restored.current = true;
       const resume = await getChapter(saved.current);
       if (resume) {
-        seriesRef.current = resume.seriesId
-          ? ((await getSeriesById(resume.seriesId)) ?? null)
-          : null;
-        setSeries(seriesRef.current);
+        pushLayer("read");
         setChapter(resume);
         setProgress(resume.progress);
       }
@@ -227,7 +330,7 @@ export default function Page() {
    * tab is hidden, so it is taken again on every return to the foreground.
    */
   useEffect(() => {
-    if (!busy) return;
+    if (!translatingNow) return;
 
     type Sentinel = { release: () => Promise<void> };
     const api = (
@@ -260,8 +363,7 @@ export default function Page() {
       document.removeEventListener("visibilitychange", onVisible);
       void sentinel?.release().catch(() => undefined);
     };
-  }, [busy]);
-
+  }, [translatingNow]);
 
   /* ---------------------------- streaming writes -------------------------- */
 
@@ -299,7 +401,7 @@ export default function Page() {
    */
   const schedule = useCallback(() => {
     if (flushTimer.current !== null) return;
-    flushTimer.current = setTimeout(flush, 90);
+    flushTimer.current = setTimeout(flush, 120);
   }, [flush]);
 
   const persist = useCallback((next: Chapter, immediate = false) => {
@@ -346,22 +448,14 @@ export default function Page() {
     };
   }, [flush]);
 
-  /** The glossary belongs to the novel, not the chapter - persist it there. */
-  const persistSeriesGlossary = useCallback(
-    async (glossary: GlossaryEntry[]) => {
-      const current = seriesRef.current;
-      if (!current) return;
-      const next = { ...current, glossary };
-      seriesRef.current = next;
-      setSeries(next);
-      setAllSeries((list) =>
-        list.map((n) => (n.id === next.id ? next : n)),
-      );
-      setGlossarySeries((g) => (g && g.id === next.id ? next : g));
-      await saveSeries(next);
-    },
-    [],
-  );
+  /** Puts a changed novel everywhere it is shown, then stores it. */
+  const updateSeries = useCallback(async (next: Series) => {
+    allSeriesRef.current = allSeriesRef.current.some((n) => n.id === next.id)
+      ? allSeriesRef.current.map((n) => (n.id === next.id ? next : n))
+      : [...allSeriesRef.current, next];
+    setAllSeries(allSeriesRef.current);
+    await saveSeries(next);
+  }, []);
 
   /* ------------------------------- pipeline ------------------------------- */
 
@@ -372,13 +466,25 @@ export default function Page() {
     ) => {
       const controller = new AbortController();
       abortRef.current = controller;
+      const { style: currentStyle } = useSettings.getState();
 
-      let working = { ...target, status: "translating" as const };
+      // The novel this job belongs to, held locally: the reader may open a
+      // different novel while this one is still translating.
+      let novel: Series | null =
+        seriesById(target.seriesId) ??
+        (target.seriesId ? ((await getSeriesById(target.seriesId)) ?? null) : null);
+      const book = novel ? { name: novel.name, info: novel.info } : undefined;
+      const sources = target.paragraphs.map((p) => p.source);
+
+      let working: Chapter = { ...target, status: "translating" };
       jobRef.current = working;
-      setJob({ id: working.id, title: working.translatedTitle || working.title });
+      setJob({ id: working.id, title: working.translatedTitle || working.title, seriesId: working.seriesId });
+      setNotice(null);
       // Mirror onto the screen only if this is the chapter being read.
       setChapter((prev) => (prev && prev.id === working.id ? working : prev));
       persist(working, true);
+
+      let fullGlossary = novel?.glossary ?? working.glossary;
 
       // 1. Glossary pass — locks names before any prose is written. It runs on
       //    every new chapter so characters introduced later join the same
@@ -386,61 +492,82 @@ export default function Page() {
       if (!opts.skipGlossary) {
         setPhase("preparing");
         try {
-          const known = seriesRef.current?.glossary ?? working.glossary;
           const result = await runGlossaryPass({
-            config,
-            style,
+            ring: currentRing(),
+            style: currentStyle,
+            book,
             title: working.title,
-            paragraphs: working.paragraphs.map((p) => p.source),
-            known,
+            paragraphs: sources,
+            known: relevantGlossary(fullGlossary, [working.title, ...sources]),
             signal: controller.signal,
+            onNotice: setNotice,
           });
           if (result) {
-            const merged = mergeGlossary(known, result.terms);
+            // Merge into the freshest copy, so edits made meanwhile survive.
+            const latest = seriesById(novel?.id) ?? novel;
+            fullGlossary = mergeGlossary(latest?.glossary ?? fullGlossary, result.terms);
+            if (latest) {
+              novel = { ...latest, glossary: fullGlossary };
+              await updateSeries(novel);
+            }
             working = {
               ...working,
-              glossary: merged,
               translatedTitle: result.title || working.translatedTitle,
             };
-            setChapter((prev) => (prev && prev.id === working.id ? working : prev));
             setJob({
               id: working.id,
               title: working.translatedTitle || working.title,
+              seriesId: working.seriesId,
             });
-            persist(working, true);
-            await persistSeriesGlossary(merged);
           }
         } catch (e) {
+          if (controller.signal.aborted) {
+            setPhase("idle");
+            setJob(null);
+            const stopped = { ...working, status: "draft" as const };
+            setChapter((prev) => (prev && prev.id === stopped.id ? stopped : prev));
+            persist(stopped, true);
+            jobRef.current = null;
+            return;
+          }
           setPhase("idle");
           setJob(null);
+          setNotice(null);
           const message = e instanceof Error ? e.message : "เตรียมคำศัพท์ไม่สำเร็จ";
           push(message, "error");
           const failed = { ...working, status: "error" as const };
           setChapter((prev) => (prev && prev.id === failed.id ? failed : prev));
           persist(failed, true);
+          jobRef.current = null;
           if (/API Key/.test(message)) setShowSettings(true);
           return;
         }
       }
+
+      // Only the terms this chapter uses travel with it — a long novel's full
+      // glossary would bloat every request and every saved chapter.
+      const glossary = relevantGlossary(fullGlossary, [working.title, ...sources]);
+      working = { ...working, glossary };
+      setChapter((prev) => (prev && prev.id === working.id ? working : prev));
+      persist(working, true);
 
       // 2. Streamed translation, chunk by chunk.
       setPhase("translating");
       setProgress(0);
 
       const skip = opts.skipDone
-        ? new Set(
-            working.paragraphs.filter((p) => p.target).map((p) => p.id),
-          )
+        ? new Set(working.paragraphs.filter((p) => p.target).map((p) => p.id))
         : undefined;
 
       let failure: string | null = null;
 
       await runTranslation({
-        config,
-        style,
-        glossary: working.glossary,
+        ring: currentRing(),
+        style: currentStyle,
+        book,
+        glossary,
         title: working.title,
-        paragraphs: working.paragraphs.map((p) => p.source),
+        paragraphs: sources,
         skip,
         signal: controller.signal,
         onParagraph: (id, text) => {
@@ -456,19 +583,21 @@ export default function Page() {
         onError: (message) => {
           failure = message;
         },
+        onNotice: setNotice,
       });
 
       flush();
       setPhase("idle");
       setJob(null);
-      abortRef.current = null;
+      setNotice(null);
+      if (abortRef.current === controller) abortRef.current = null;
 
       const finished = jobRef.current ?? working;
-      const done = finished.paragraphs.every((p) => p.target);
+      const done = finished.paragraphs.every((p) => p.target || !p.source.trim());
       const final: Chapter = {
         ...finished,
         status: failure ? "error" : done ? "done" : "draft",
-        progress: 1,
+        progress: done ? 1 : finished.progress,
         updatedAt: Date.now(),
       };
       setChapter((prev) => (prev && prev.id === final.id ? final : prev));
@@ -484,26 +613,24 @@ export default function Page() {
         push(`แปลเสร็จแล้ว — ${final.translatedTitle || final.title}`, "success");
 
         // Walk on to the next chapter on the source site, if asked to.
-        if (autoNext && final.nextUrl) {
+        if (useSettings.getState().autoNext && final.nextUrl) {
           if (autoChainRef.current < AUTO_NEXT_LIMIT) {
             autoChainRef.current += 1;
             continueRef.current?.(final.nextUrl, final.seriesId);
           } else {
-            push(
-              `ดึงตอนถัดไปอัตโนมัติครบ ${AUTO_NEXT_LIMIT} ตอนแล้ว หยุดไว้ก่อน`,
-              "info",
-            );
+            push(`ดึงตอนถัดไปอัตโนมัติครบ ${AUTO_NEXT_LIMIT} ตอนแล้ว หยุดไว้ก่อน`, "info");
           }
         }
       }
     },
-    [config, style, persist, push, schedule, flush, persistSeriesGlossary, autoNext],
+    [persist, push, schedule, flush, seriesById, updateSeries],
   );
 
   /**
    * Works through the queue one chapter at a time. Sequential on purpose: each
    * chapter feeds new terms into the novel's glossary, and the next chapter
-   * should be translated knowing them.
+   * should be translated knowing them — and one chapter at a time is also
+   * what keeps request volume inside the provider's rate limit.
    */
   const pump = useCallback(async () => {
     if (runningRef.current) return;
@@ -517,13 +644,6 @@ export default function Page() {
 
         const target = await getChapter(next.id);
         if (!target) continue;
-
-        const novel = target.seriesId
-          ? await getSeriesById(target.seriesId)
-          : undefined;
-        seriesRef.current = novel ?? null;
-        setSeries(novel ?? null);
-
         await translate(target, next.opts);
       }
     } finally {
@@ -533,121 +653,187 @@ export default function Page() {
 
   const enqueue = useCallback(
     (items: QueueItem[]) => {
-      if (!items.length) return;
-      queueRef.current = [...queueRef.current, ...items];
+      // A chapter already waiting or in flight is never lined up twice.
+      const taken = new Set([
+        ...queueRef.current.map((q) => q.id),
+        ...(jobRef.current ? [jobRef.current.id] : []),
+      ]);
+      const fresh = items.filter((i) => !taken.has(i.id));
+      if (!fresh.length) return 0;
+      queueRef.current = [...queueRef.current, ...fresh];
       setQueue([...queueRef.current]);
       void pump();
+      return fresh.length;
     },
     [pump],
   );
 
+  const isQueued = (id: string) =>
+    jobRef.current?.id === id || queueRef.current.some((q) => q.id === id);
+
+  const findByUrl = (url: string) => {
+    const key = urlKey(url);
+    return libraryRef.current.find((c) => c.sourceUrl && urlKey(c.sourceUrl) === key);
+  };
+
+  /**
+   * Hands a chapter that already exists back to the reader instead of fetching
+   * and translating it a second time.
+   */
+  const reuseExisting = useCallback(
+    (existing: Chapter, openAfter: boolean) => {
+      if (openAfter) void openChapter(existing.id);
+      if (existing.status !== "done" && !isQueued(existing.id)) {
+        enqueue([
+          {
+            id: existing.id,
+            title: existing.translatedTitle || existing.title,
+            opts: { skipDone: true },
+          },
+        ]);
+      } else if (!openAfter) {
+        push("ตอนนี้อยู่ในชั้นหนังสือแล้ว", "info");
+      }
+    },
+    // isQueued reads refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openChapter, enqueue, push],
+  );
+
   const start = useCallback(
-    async (input: string, kind: "url" | "text", pinnedSeriesId?: string) => {
-      if (!config.apiKey) {
+    async (input: string, kind: "url" | "text", opts: StartOptions = {}) => {
+      if (!keysFor(useSettings.getState()).length) {
         setShowSettings(true);
         push("ใส่ API Key ก่อนเริ่มแปล", "error");
         return;
       }
 
-      setPhase("extracting");
-      setProgress(0);
+      const url = kind === "url" ? normalizeUrl(input) : "";
+      const key = url ? urlKey(url) : "";
 
-      let source: Pick<
-        ExtractResult,
-        "title" | "siteName" | "paragraphs" | "nextUrl" | "prevUrl" | "url"
-      >;
-
-      if (kind === "url") {
-        try {
-          const res = await fetch("/api/extract", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ url: normalizeUrl(input) }),
-          });
-          const json = await res.json();
-          if (!res.ok) throw new Error(json.error ?? "ดึงเนื้อหาไม่สำเร็จ");
-          source = json as ExtractResult;
-        } catch (e) {
-          setPhase("idle");
-          push(e instanceof Error ? e.message : "ดึงเนื้อหาไม่สำเร็จ", "error");
+      if (url) {
+        // Already on a shelf: open or resume it rather than paying for it twice.
+        const existing = findByUrl(url);
+        if (existing) {
+          reuseExisting(existing, Boolean(opts.openAfter));
           return;
         }
-      } else {
-        const split = splitPastedText(input);
-        source = {
-          title: split.title,
-          siteName: null,
-          paragraphs: split.paragraphs,
-          nextUrl: null,
-          prevUrl: null,
-          url: "",
+        // Already on its way: a repeated tap does nothing.
+        if (inflight.current.has(key)) return;
+        inflight.current.add(key);
+      }
+
+      setFetching((n) => n + 1);
+
+      try {
+        let source: Pick<
+          ExtractResult,
+          "title" | "siteName" | "paragraphs" | "nextUrl" | "prevUrl" | "url"
+        >;
+
+        if (kind === "url") {
+          try {
+            const res = await fetch("/api/extract", {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ url }),
+            });
+            const json = await res.json();
+            if (!res.ok) throw new Error(json.error ?? "ดึงเนื้อหาไม่สำเร็จ");
+            source = json as ExtractResult;
+          } catch (e) {
+            push(e instanceof Error ? e.message : "ดึงเนื้อหาไม่สำเร็จ", "error");
+            return;
+          }
+
+          // The page may have redirected to a link we already have.
+          const redirected = source.url ? findByUrl(source.url) : undefined;
+          if (redirected) {
+            reuseExisting(redirected, Boolean(opts.openAfter));
+            return;
+          }
+        } else {
+          const split = splitPastedText(input);
+          source = {
+            title: split.title,
+            siteName: null,
+            paragraphs: split.paragraphs,
+            nextUrl: null,
+            prevUrl: null,
+            url: "",
+          };
+        }
+
+        if (!source.paragraphs.length) {
+          push("ไม่พบเนื้อหาให้แปล", "error");
+          return;
+        }
+
+        // Group this chapter with the rest of its novel. A shelf the reader
+        // picked wins over the one derived from the link — that is the only
+        // way the same novel read on two sites lands together.
+        const pinned = opts.seriesId ?? shelfId;
+        const novel =
+          (pinned ? await getSeriesById(pinned) : undefined) ??
+          (await ensureSeries(deriveSeries(source.title, source.url || null)));
+        if (!allSeriesRef.current.some((n) => n.id === novel.id)) {
+          allSeriesRef.current = [...allSeriesRef.current, novel];
+          setAllSeries(allSeriesRef.current);
+        }
+
+        const { config, style: currentStyle } = useSettings.getState();
+        const draft: Chapter = {
+          id: crypto.randomUUID(),
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          title: source.title,
+          translatedTitle: "",
+          sourceUrl: source.url || null,
+          siteName: source.siteName,
+          nextUrl: source.nextUrl,
+          prevUrl: source.prevUrl,
+          paragraphs: source.paragraphs.map((text, id) => ({
+            id,
+            source: text,
+            target: "",
+          })),
+          glossary: [],
+          status: "draft",
+          progress: 0,
+          model: config.model,
+          targetLanguage: currentStyle.targetLanguage,
+          seriesId: novel.id,
         };
+
+        // Long pages cost real money — show the bill before spending it.
+        const estimate = estimateJob(
+          source.paragraphs,
+          buildChunks(source.paragraphs).length,
+          config,
+        );
+        if (estimate.sourceTokens > 9000 && estimate.usd !== null) {
+          setConfirm({ draft, estimate, openAfter: Boolean(opts.openAfter) });
+          return;
+        }
+
+        await saveChapter(draft, true);
+        libraryRef.current = [draft, ...libraryRef.current];
+        setLibrary(libraryRef.current);
+        enqueue([{ id: draft.id, title: draft.title }]);
+        if (opts.openAfter) void openChapter(draft.id);
+        void refreshShelves();
+      } finally {
+        if (key) inflight.current.delete(key);
+        setFetching((n) => Math.max(0, n - 1));
       }
-
-      if (!source.paragraphs.length) {
-        setPhase("idle");
-        push("ไม่พบเนื้อหาให้แปล", "error");
-        return;
-      }
-
-      // Group this chapter with the rest of its novel and inherit its glossary.
-      // A shelf the reader picked wins over the one derived from the link —
-      // that is the only way the same novel read on two sites lands together.
-      const pinned = pinnedSeriesId ?? shelfId;
-      const novel =
-        (pinned ? await getSeriesById(pinned) : undefined) ??
-        (await ensureSeries(deriveSeries(source.title, source.url || null)));
-      seriesRef.current = novel;
-      setSeries(novel);
-      setAllSeries((list) =>
-        list.some((n) => n.id === novel.id) ? list : [...list, novel],
-      );
-
-      const draft: Chapter = {
-        id: crypto.randomUUID(),
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        title: source.title,
-        translatedTitle: "",
-        sourceUrl: source.url || null,
-        siteName: source.siteName,
-        nextUrl: source.nextUrl,
-        prevUrl: source.prevUrl,
-        paragraphs: source.paragraphs.map((text, id) => ({
-          id,
-          source: text,
-          target: "",
-        })),
-        glossary: novel.glossary,
-        status: "translating",
-        progress: 0,
-        model: config.model,
-        targetLanguage: style.targetLanguage,
-        seriesId: novel.id,
-      };
-
-      // Long pages cost real money — show the bill before spending it.
-      const estimate = estimateJob(
-        source.paragraphs,
-        buildChunks(source.paragraphs).length,
-        config,
-      );
-      if (estimate.sourceTokens > 9000) {
-        setPhase("idle");
-        setConfirm({ draft, estimate });
-        return;
-      }
-
-      await saveChapter(draft, true);
-      await refreshShelves();
-      setPhase("idle");
-      enqueue([{ id: draft.id, title: draft.title }]);
     },
-    [config, style, push, shelfId, enqueue, refreshShelves],
+    // findByUrl reads refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [push, shelfId, enqueue, refreshShelves, reuseExisting, openChapter],
   );
 
   useEffect(() => {
-    continueRef.current = (url, seriesId) => void start(url, "url", seriesId);
+    continueRef.current = (url, seriesId) => void start(url, "url", { seriesId });
   }, [start]);
 
   /** Stops the chapter in flight and drops whatever was still waiting. */
@@ -658,97 +844,88 @@ export default function Page() {
     setQueue([]);
     abortRef.current?.abort();
     abortRef.current = null;
-    setPhase("idle");
     if (waiting > 0) push(`ยกเลิกคิวที่เหลืออีก ${waiting} ตอนแล้ว`);
   };
 
   /** Saves a draft then puts it in line to be translated. */
-  const queueDraft = async (draft: Chapter) => {
+  const queueDraft = async (draft: Chapter, openAfter: boolean) => {
     await saveChapter(draft, true);
-    await refreshShelves();
+    libraryRef.current = [draft, ...libraryRef.current];
+    setLibrary(libraryRef.current);
     enqueue([{ id: draft.id, title: draft.title }]);
-  };
-
-  const openChapter = async (id: string) => {
-    const found = await getChapter(id);
-    if (found) {
-      const novel = found.seriesId
-        ? await getSeriesById(found.seriesId)
-        : undefined;
-      seriesRef.current = novel ?? null;
-      setSeries(novel ?? null);
-      setChapter(found);
-      setProgress(found.progress);
-      commitReading(openChapterMark(readingRef.current, id), true);
-      window.scrollTo({ top: 0 });
-    }
-  };
-
-  /** Leaves the reader; the chapter stops counting as the one in progress. */
-  const closeChapter = () => {
-    commitReading(clearCurrent(readingRef.current), true);
-    setChapter(null);
+    if (openAfter) void openChapter(draft.id);
+    void refreshShelves();
   };
 
   const removeChapter = async (id: string) => {
+    queueRef.current = queueRef.current.filter((q) => q.id !== id);
+    setQueue([...queueRef.current]);
+    if (jobRef.current?.id === id) abortRef.current?.abort();
     await repoDelete(id);
     commitReading(forgetChapter(readingRef.current, id), true);
     await refreshShelves();
-    setOpenShelf((shelf) =>
-      shelf
-        ? { ...shelf, chapters: shelf.chapters.filter((c) => c.id !== id) }
-        : shelf,
-    );
-    if (chapterRef.current?.id === id) setChapter(null);
+    if (chapterRef.current?.id === id) goBack(leaveChapter);
   };
 
-  const openGlossaryFor = (novel: Series | null) => {
-    if (!novel) {
+  const openGlossaryFor = (id: string | null | undefined) => {
+    if (!id || id === ORPHANS) {
       push("ตอนนี้ยังไม่ได้ผูกกับเรื่องไหน", "error");
       return;
     }
-    // Only one sheet at a time — stacked sheets would hide this one.
-    setOpenShelf(null);
-    setGlossarySeries(novel);
+    setGlossarySeriesId(id);
     setShowGlossary(true);
   };
 
-  /** Edits land on the novel, then cascade to whatever is on screen. */
+  /** Edits land on the novel; the save is debounced while the reader types. */
   const setGlossary = (next: GlossaryEntry[]) => {
-    const target = glossarySeries;
+    const target = seriesById(glossarySeriesId);
     if (!target) return;
     const updated = { ...target, glossary: next };
-
-    setGlossarySeries(updated);
-    setAllSeries((list) => list.map((n) => (n.id === target.id ? updated : n)));
-    if (seriesRef.current?.id === target.id) {
-      seriesRef.current = updated;
-      setSeries(updated);
-    }
-    setChapter((prev) =>
-      prev && prev.seriesId === target.id ? { ...prev, glossary: next } : prev,
-    );
+    allSeriesRef.current = allSeriesRef.current.map((n) => (n.id === target.id ? updated : n));
+    setAllSeries(allSeriesRef.current);
 
     if (glossaryTimer.current) clearTimeout(glossaryTimer.current);
     glossaryTimer.current = setTimeout(() => {
-      void saveSeries({ ...updated, glossary: cleanGlossary(next) });
+      const latest = seriesById(target.id);
+      if (latest) void saveSeries({ ...latest, glossary: cleanGlossary(latest.glossary) });
     }, 900);
+  };
+
+  const saveBookInfo = async (draft: BookDraft) => {
+    const target = seriesById(infoSeriesId);
+    setInfoSeriesId(null);
+    if (!target) return;
+    await updateSeries({ ...target, name: draft.name || target.name, info: draft.info });
+    push("บันทึกข้อมูลหนังสือแล้ว", "success");
   };
 
   const retranslate = () => {
     const current = chapterRef.current;
     if (!current) return;
+    if (isQueued(current.id)) {
+      push("ตอนนี้อยู่ในคิวแปลอยู่แล้ว", "info");
+      return;
+    }
     const cleared: Chapter = {
       ...current,
       paragraphs: current.paragraphs.map((p) => ({ ...p, target: "" })),
     };
-    void translate(cleared, { skipGlossary: true });
+    void saveChapter(cleared, true).then(() =>
+      enqueue([{ id: cleared.id, title: cleared.title, opts: { skipGlossary: true } }]),
+    );
+    setChapter(cleared);
   };
 
   const fillGaps = () => {
     const current = chapterRef.current;
-    if (!current) return;
-    void translate(current, { skipDone: true, skipGlossary: true });
+    if (!current || isQueued(current.id)) return;
+    enqueue([
+      {
+        id: current.id,
+        title: current.translatedTitle || current.title,
+        opts: { skipDone: true, skipGlossary: true },
+      },
+    ]);
   };
 
   const plainText = (c: Chapter) =>
@@ -781,20 +958,15 @@ export default function Page() {
    * then queues every one of them.
    */
   const importPdf = async (result: PdfImportResult) => {
-    if (!config.apiKey) {
+    if (!keysFor(useSettings.getState()).length) {
       setShowSettings(true);
       push("ใส่ API Key ก่อนเริ่มแปล", "error");
       return;
     }
 
-    const novel = result.seriesId
-      ? await getSeriesById(result.seriesId)
-      : undefined;
-    const shelf =
-      novel ?? (await ensureSeries(deriveSeries(result.bookName, null)));
-
-    seriesRef.current = shelf;
-    setSeries(shelf);
+    const novel = result.seriesId ? await getSeriesById(result.seriesId) : undefined;
+    const shelf = novel ?? (await ensureSeries(deriveSeries(result.bookName, null)));
+    const { config, style: currentStyle } = useSettings.getState();
 
     const now = Date.now();
     const drafts: Chapter[] = result.chapters.map((c, i) => ({
@@ -809,11 +981,11 @@ export default function Page() {
       nextUrl: null,
       prevUrl: null,
       paragraphs: c.paragraphs.map((text, id) => ({ id, source: text, target: "" })),
-      glossary: shelf.glossary,
+      glossary: [],
       status: "draft",
       progress: 0,
       model: config.model,
-      targetLanguage: style.targetLanguage,
+      targetLanguage: currentStyle.targetLanguage,
       seriesId: shelf.id,
     }));
 
@@ -831,9 +1003,7 @@ export default function Page() {
     // Nothing from this shelf should stay queued or on screen afterwards.
     queueRef.current = queueRef.current.filter((q) => !ids.includes(q.id));
     setQueue([...queueRef.current]);
-    if (chapterRef.current && ids.includes(chapterRef.current.id)) {
-      setChapter(null);
-    }
+    if (jobRef.current && ids.includes(jobRef.current.id)) abortRef.current?.abort();
 
     await deleteShelf(target.series.id, ids);
 
@@ -842,11 +1012,7 @@ export default function Page() {
     commitReading(marks, true);
 
     if (shelfId === target.series.id) setShelfId("");
-    if (seriesRef.current?.id === target.series.id) {
-      seriesRef.current = null;
-      setSeries(null);
-    }
-    setOpenShelf(null);
+    goBack(leaveBook);
     await refreshShelves();
     push(`ลบ “${target.series.name}” แล้ว`, "success");
   };
@@ -862,56 +1028,72 @@ export default function Page() {
       return;
     }
 
-    setOpenShelf(null);
     setShelfId((id) => (id === from.series.id ? targetId : id));
-    setGlossarySeries((g) => (g && g.id === merged.id ? merged : g));
-    if (seriesRef.current?.id === from.series.id || seriesRef.current?.id === targetId) {
-      seriesRef.current = merged;
-      setSeries(merged);
-    }
+    setBookId(targetId);
     setChapter((prev) =>
-      prev && prev.seriesId === from.series.id
-        ? { ...prev, seriesId: targetId }
-        : prev,
+      prev && prev.seriesId === from.series.id ? { ...prev, seriesId: targetId } : prev,
     );
 
     await refreshShelves();
-    push(`รวมเข้าชั้น “${merged.name}” แล้ว`, "success");
+    push(`รวมเข้า “${merged.name}” แล้ว`, "success");
   };
 
+  /* ------------------------------ derived data ----------------------------- */
+
+  const shelves = useMemo(() => buildShelves(allSeries, library), [allSeries, library]);
+  const queuedIds = useMemo(() => new Set(queue.map((q) => q.id)), [queue]);
+
   const missing = chapter?.paragraphs.filter((p) => !p.target).length ?? 0;
-  const shelves = buildShelves(allSeries, library);
+  const chapterSeries = chapter ? allSeries.find((s) => s.id === chapter.seriesId) ?? null : null;
+  const glossarySeries = allSeries.find((s) => s.id === glossarySeriesId) ?? null;
+  const infoSeries = allSeries.find((s) => s.id === infoSeriesId) ?? null;
+  const openShelf = bookId
+    ? (shelves.find((s) => (s.series.id || ORPHANS) === bookId) ?? null)
+    : null;
 
   // Neighbours within the same novel, in reading order, so the reader can walk
   // a shelf the way a novel site lets you walk a table of contents.
-  const siblings = (() => {
+  const siblings = useMemo(() => {
     if (!chapter) return { prev: null as Chapter | null, next: null as Chapter | null };
     const list =
-      shelves.find((sh) => sh.series.id === chapter.seriesId)?.chapters ?? [];
+      shelves.find((sh) => (sh.series.id || "") === (chapter.seriesId || ""))?.chapters ?? [];
     const at = list.findIndex((c) => c.id === chapter.id);
     if (at === -1) return { prev: null as Chapter | null, next: null as Chapter | null };
     return { prev: list[at - 1] ?? null, next: list[at + 1] ?? null };
-  })();
+  }, [chapter, shelves]);
 
   const nextMode: "chapter" | "fetch" | "none" = siblings.next
     ? "chapter"
     : chapter?.nextUrl
       ? "fetch"
       : "none";
-  const shelfOptions: ShelfOption[] = shelves
-    .filter((s) => s.series.id)
-    .map((s) => ({ series: s.series, chapterCount: s.chapters.length }));
+  const fetchingNext = Boolean(
+    chapter?.nextUrl && inflight.current.has(urlKey(chapter.nextUrl)),
+  );
+
+  const shelfOptions: ShelfOption[] = useMemo(
+    () =>
+      shelves
+        .filter((s) => s.series.id)
+        .map((s) => ({ series: s.series, chapterCount: s.chapters.length })),
+    [shelves],
+  );
+
+  const jobLabel = notice
+    ? notice
+    : `${PHASE_LABEL[phase] || "กำลังทำงาน"}${
+        phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
+      }`;
 
   /** Drops every trace of the previous reader before the next one signs in. */
   const handleSignedOut = () => {
     stop();
     setChapter(null);
+    setBookId(null);
     setLibrary([]);
     setAllSeries([]);
-    setSeries(null);
-    seriesRef.current = null;
-    setOpenShelf(null);
-    setGlossarySeries(null);
+    setGlossarySeriesId(null);
+    setInfoSeriesId(null);
     setShelfId("");
     restored.current = false;
     readingRef.current = { marks: {}, current: null };
@@ -933,199 +1115,42 @@ export default function Page() {
     return <AuthGate onSignedIn={() => void loadLibrary()} />;
   }
 
-  if (!chapter) {
-    return (
-      <main className="relative z-10 min-h-dvh">
-        <TopChrome
-          onLibrary={() => setShowLibrary(true)}
-          onSettings={() => setShowSettings(true)}
-          onAccount={() => setShowAccount(true)}
-          cloudReady={cloud.status === "ready"}
-          libraryCount={mounted ? library.length : 0}
-        />
-
-        <Composer
-          busy={busy}
-          busyLabel={PHASE_LABEL[phase] || "กำลังทำงาน"}
-          onSubmit={start}
-          onOpenSettings={() => setShowSettings(true)}
-          shelves={mounted ? shelfOptions : []}
-          shelfId={shelfId}
-          onShelfChange={setShelfId}
-          onImportPdf={() => setShowPdf(true)}
-        />
-
-        {job || queue.length ? (
-          <JobBanner
-            title={job?.title ?? "กำลังเตรียมคิว…"}
-            label={`${PHASE_LABEL[phase] || "กำลังทำงาน"}${
-              phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
-            }`}
-            progress={phase === "translating" ? progress : 0}
-            waiting={queue.length}
-            onOpen={job ? () => void openChapter(job.id) : undefined}
-            onStop={stop}
-          />
-        ) : null}
-
-        {mounted ? (
-          <Bookshelf shelves={shelves} onOpen={setOpenShelf} />
-        ) : null}
-
-        <Sheets
-          {...{
-            showSettings,
-            setShowSettings,
-            showType,
-            setShowType,
-            showGlossary,
-            setShowGlossary,
-            showLibrary,
-            setShowLibrary,
-            showAccount,
-            setShowAccount,
-            chapter,
-            glossarySeries,
-            setGlossary,
-            retranslate,
-            library,
-            openChapter,
-            removeChapter,
-            setLibrary,
-            push,
-            onSignedOut: handleSignedOut,
-          }}
-        />
-        <PdfImport
-          open={showPdf}
-          onClose={() => setShowPdf(false)}
-          shelves={shelfOptions}
-          config={config}
-          onImport={(result) => void importPdf(result)}
-        />
-        <ShelfSheet
-          shelf={openShelf}
-          shelves={shelves}
-          onClose={() => setOpenShelf(null)}
-          onOpenChapter={openChapter}
-          onOpenGlossary={openGlossaryFor}
-          onDeleteChapter={removeChapter}
-          onMerge={(from, targetId) => void mergeShelf(from, targetId)}
-          marks={reading.marks}
-          currentId={reading.current}
-          onDeleteShelf={(target) => void removeShelf(target)}
-          onQueueAll={(chapters) => {
-            enqueue(
-              chapters.map((c) => ({
-                id: c.id,
-                title: c.translatedTitle || c.title,
-                // Already-translated paragraphs are kept; only gaps are filled.
-                opts: { skipDone: true },
-              })),
-            );
-            push(`เพิ่ม ${chapters.length} ตอนเข้าคิวแปลแล้ว`, "success");
-          }}
-        />
-        <CostGate
-          pending={confirm}
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => {
-            const pending = confirm;
-            setConfirm(null);
-            if (pending) void queueDraft(pending.draft);
-          }}
-        />
-        <ToastStack toasts={toasts} />
-      </main>
-    );
-  }
-
-  return (
-    <main
-      className="relative z-10 min-h-dvh"
-      style={{ background: "var(--reader-bg)" }}
-    >
-      <ReaderHeader
-        chapter={chapter}
-        visible={chrome.visible}
-        busy={viewingJob}
-        busyLabel={`${PHASE_LABEL[phase]}${
-          phase === "translating" ? ` ${Math.round(progress * 100)}%` : ""
-        }`}
-        progress={progress}
-        width={reader.maxWidth}
-        showSource={reader.showSource}
-        // Going back leaves the translation running in the background.
-        onBack={closeChapter}
-        onStop={stop}
-        onToggleSource={() => setReader({ showSource: !reader.showSource })}
-        onGlossary={() => openGlossaryFor(series)}
-        onTypography={() => setShowType(true)}
+  const sheets = (
+    <>
+      <SettingsSheet open={showSettings} onClose={() => setShowSettings(false)} />
+      <TypographySheet open={showType} onClose={() => setShowType(false)} />
+      <GlossarySheet
+        open={showGlossary && Boolean(glossarySeries)}
+        onClose={() => setShowGlossary(false)}
+        seriesName={glossarySeries?.name ?? null}
+        glossary={glossarySeries?.glossary ?? []}
+        onChange={setGlossary}
+        onNotify={push}
+        onRetranslate={
+          chapter && glossarySeries && chapter.seriesId === glossarySeries.id && !viewingJob
+            ? retranslate
+            : undefined
+        }
       />
-
-      <Reader chapter={chapter} prefs={reader} streaming={phase === "translating"} />
-
-      <ReaderDock
-        visible={chrome.visible}
-        progress={chrome.progress}
-        busy={viewingJob}
-        missing={missing}
-        width={reader.maxWidth}
-        hasPrev={Boolean(siblings.prev)}
-        nextMode={nextMode}
-        onTools={() => setShowTools(true)}
-        onFillGaps={fillGaps}
-        onPrev={() => {
-          if (siblings.prev) void openChapter(siblings.prev.id);
-        }}
-        onNext={() => {
-          if (siblings.next) void openChapter(siblings.next.id);
-          else if (chapter.nextUrl) {
-            autoChainRef.current = 0;
-            void start(chapter.nextUrl, "url", chapter.seriesId);
-          }
-        }}
-        onCopy={copyAll}
-        onDownload={download}
+      <BookInfoSheet
+        series={infoSeries}
+        onClose={() => setInfoSeriesId(null)}
+        onSave={(d) => void saveBookInfo(d)}
       />
-
-      <ReaderToolsSheet
-        open={showTools}
-        onClose={() => setShowTools(false)}
-        glossaryCount={series?.glossary.length ?? chapter.glossary.length}
-        missing={viewingJob ? 0 : missing}
-        showSource={reader.showSource}
-        onToggleSource={(v) => setReader({ showSource: v })}
-        onCopy={copyAll}
-        onDownload={download}
-        onFillGaps={fillGaps}
-        onGlossary={() => openGlossaryFor(series)}
-        onTypography={() => setShowType(true)}
+      <LibrarySheet
+        open={showLibrary}
+        onClose={() => setShowLibrary(false)}
+        chapters={library}
+        currentId={chapter?.id ?? null}
+        onOpenChapter={(id) => void openChapter(id)}
+        onDelete={(id) => void removeChapter(id)}
+        onRefresh={() => void listChapters().then(setLibrary)}
       />
-
-      <Sheets
-        {...{
-          showSettings,
-          setShowSettings,
-          showType,
-          setShowType,
-          showGlossary,
-          setShowGlossary,
-          showLibrary,
-          setShowLibrary,
-          showAccount,
-          setShowAccount,
-          chapter,
-          glossarySeries,
-          setGlossary,
-          retranslate,
-          library,
-          openChapter,
-          removeChapter,
-          setLibrary,
-          push,
-          onSignedOut: handleSignedOut,
-        }}
+      <AccountSheet
+        open={showAccount}
+        onClose={() => setShowAccount(false)}
+        onNotify={push}
+        onSignedOut={handleSignedOut}
       />
       <CostGate
         pending={confirm}
@@ -1133,10 +1158,187 @@ export default function Page() {
         onConfirm={() => {
           const pending = confirm;
           setConfirm(null);
-          if (pending) void queueDraft(pending.draft);
+          if (pending) void queueDraft(pending.draft, pending.openAfter);
         }}
       />
       <ToastStack toasts={toasts} />
+    </>
+  );
+
+  if (chapter) {
+    return (
+      <main className="relative z-10 min-h-dvh" style={{ background: "var(--reader-bg)" }}>
+        <ReaderHeader
+          chapter={chapter}
+          seriesName={chapterSeries?.name ?? null}
+          visible={chrome.visible}
+          busy={viewingJob}
+          busyLabel={jobLabel}
+          progress={progress}
+          width={reader.maxWidth}
+          showSource={reader.showSource}
+          // Going back leaves the translation running in the background.
+          onBack={() => goBack(leaveChapter)}
+          onStop={stop}
+          onToggleSource={() => setReader({ showSource: !reader.showSource })}
+          onGlossary={() => openGlossaryFor(chapter.seriesId)}
+          onTypography={() => setShowType(true)}
+        />
+
+        <Reader
+          chapter={chapter}
+          prefs={reader}
+          streaming={viewingJob && phase === "translating"}
+          waiting={queuedIds.has(chapter.id) || (viewingJob && phase === "preparing")}
+        />
+
+        <ReaderDock
+          visible={chrome.visible}
+          progress={chrome.progress}
+          busy={viewingJob || queuedIds.has(chapter.id)}
+          missing={missing}
+          width={reader.maxWidth}
+          hasPrev={Boolean(siblings.prev)}
+          nextMode={nextMode}
+          fetchingNext={fetchingNext}
+          onTools={() => setShowTools(true)}
+          onFillGaps={fillGaps}
+          onPrev={() => {
+            if (siblings.prev) void openChapter(siblings.prev.id);
+          }}
+          onNext={() => {
+            if (siblings.next) void openChapter(siblings.next.id);
+            else if (chapter.nextUrl) {
+              autoChainRef.current = 0;
+              void start(chapter.nextUrl, "url", {
+                seriesId: chapter.seriesId,
+                openAfter: true,
+              });
+            }
+          }}
+          onCopy={copyAll}
+          onDownload={download}
+        />
+
+        <ReaderToolsSheet
+          open={showTools}
+          onClose={() => setShowTools(false)}
+          glossaryCount={chapterSeries?.glossary.length ?? chapter.glossary.length}
+          missing={viewingJob ? 0 : missing}
+          showSource={reader.showSource}
+          onToggleSource={(v) => setReader({ showSource: v })}
+          onCopy={copyAll}
+          onDownload={download}
+          onFillGaps={fillGaps}
+          onGlossary={() => openGlossaryFor(chapter.seriesId)}
+          onTypography={() => setShowType(true)}
+        />
+        {sheets}
+      </main>
+    );
+  }
+
+  if (openShelf) {
+    return (
+      <>
+        <BookPage
+          shelf={openShelf}
+          shelves={shelves}
+          marks={reading.marks}
+          currentId={reading.current}
+          jobId={job?.id ?? null}
+          queuedIds={queuedIds}
+          onBack={() => goBack(leaveBook)}
+          onOpenChapter={(id) => void openChapter(id)}
+          onOpenGlossary={() => openGlossaryFor(openShelf.series.id)}
+          onEditInfo={() => setInfoSeriesId(openShelf.series.id || null)}
+          onDeleteChapter={(id) => void removeChapter(id)}
+          onMerge={(from, targetId) => void mergeShelf(from, targetId)}
+          onDeleteShelf={(target) => void removeShelf(target)}
+          onQueueAll={(chapters) => {
+            const added = enqueue(
+              chapters.map((c) => ({
+                id: c.id,
+                title: c.translatedTitle || c.title,
+                // Already-translated paragraphs are kept; only gaps are filled.
+                opts: { skipDone: true },
+              })),
+            );
+            push(added ? `เพิ่ม ${added} ตอนเข้าคิวแปลแล้ว` : "ทุกตอนอยู่ในคิวแล้ว", "success");
+          }}
+        />
+        {job || queue.length ? (
+          <JobBanner
+            floating
+            title={job?.title ?? "กำลังเตรียมคิว…"}
+            label={jobLabel}
+            progress={phase === "translating" ? progress : 0}
+            waiting={queue.length}
+            onOpen={job ? () => void openChapter(job.id) : undefined}
+            onStop={stop}
+          />
+        ) : null}
+        {sheets}
+      </>
+    );
+  }
+
+  return (
+    <main className="relative z-10 min-h-dvh">
+      <TopChrome
+        onLibrary={() => setShowLibrary(true)}
+        onSettings={() => setShowSettings(true)}
+        onAccount={() => setShowAccount(true)}
+        username={cloud.username}
+        needsKey={!hasKey}
+        theme={theme}
+        onTheme={setTheme}
+      />
+
+      <Composer
+        compact={shelves.length > 0}
+        busy={fetching > 0}
+        busyLabel="กำลังดึงเนื้อหา…"
+        onSubmit={(input, kind) => void start(input, kind)}
+        onOpenSettings={() => setShowSettings(true)}
+        shelves={shelfOptions}
+        shelfId={shelfId}
+        onShelfChange={setShelfId}
+        onImportPdf={() => setShowPdf(true)}
+      />
+
+      {job || queue.length ? (
+        <JobBanner
+          title={job?.title ?? "กำลังเตรียมคิว…"}
+          label={jobLabel}
+          progress={phase === "translating" ? progress : 0}
+          waiting={queue.length}
+          onOpen={job ? () => void openChapter(job.id) : undefined}
+          onStop={stop}
+        />
+      ) : null}
+
+      <ContinueReading
+        shelves={shelves}
+        marks={reading.marks}
+        onOpenChapter={(id) => void openChapter(id)}
+      />
+
+      <Bookshelf
+        shelves={shelves}
+        marks={reading.marks}
+        activeSeriesId={job?.seriesId ?? null}
+        onOpen={openBook}
+      />
+
+      <PdfImport
+        open={showPdf}
+        onClose={() => setShowPdf(false)}
+        shelves={shelfOptions}
+        config={useSettings.getState().config}
+        onImport={(result) => void importPdf(result)}
+      />
+      {sheets}
     </main>
   );
 }
@@ -1147,44 +1349,63 @@ function TopChrome({
   onLibrary,
   onSettings,
   onAccount,
-  cloudReady,
-  libraryCount,
+  username,
+  needsKey,
+  theme,
+  onTheme,
 }: {
   onLibrary: () => void;
   onSettings: () => void;
   onAccount: () => void;
-  cloudReady: boolean;
-  libraryCount: number;
+  username: string | null;
+  needsKey: boolean;
+  theme: ThemeName;
+  onTheme: (t: ThemeName) => void;
 }) {
+  // มืด → สว่าง → กระดาษ → มืด
+  const next: ThemeName = theme === "dark" ? "light" : theme === "light" ? "sepia" : "dark";
+  const label = { dark: "ธีมมืด", light: "ธีมสว่าง", sepia: "ธีมกระดาษ" }[theme];
   return (
-    <header className="fixed inset-x-0 top-0 z-30 flex items-center gap-2 border-b border-transparent bg-[var(--bg)]/80 px-4 py-3.5 backdrop-blur-xl sm:px-6">
-      <div className="flex items-center gap-2 font-semibold tracking-tight">
-        <span className="grid h-7 w-7 place-items-center rounded-lg bg-[var(--accent)] text-[13px] text-[var(--btn-fg)]">
-          N
-        </span>
-        <span className="text-[15px]">NovelFlow</span>
-      </div>
-      <div className="flex-1" />
-      <Button variant="ghost" size="sm" onClick={onLibrary}>
-        <BookMarked size={15} />
-        <span className="hidden sm:inline">ห้องสมุด</span>
-        {libraryCount > 0 ? (
-          <span className="rounded-md bg-[var(--bg-elev-2)] px-1.5 text-[11px]">
-            {libraryCount}
+    <header className="sticky top-0 z-30 border-b border-[var(--line-soft)] bg-[var(--bg)]/85 pt-[env(safe-area-inset-top)] backdrop-blur-xl">
+      <div className="mx-auto flex h-14 max-w-[1080px] items-center gap-1 px-3 sm:px-6">
+        <div className="flex items-center gap-2 font-semibold tracking-tight">
+          <span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--accent-strong)] font-serif text-[16px] text-white shadow-[0_6px_16px_-6px_var(--accent)]">
+            N
           </span>
-        ) : null}
-      </Button>
-      <Button variant="ghost" size="icon" onClick={onAccount} aria-label="บัญชี">
-        <UserRound size={17} className={cn(cloudReady && "text-emerald-400")} />
-      </Button>
-      <Button variant="ghost" size="icon" onClick={onSettings} aria-label="ตั้งค่า">
-        <Settings2 size={17} />
-      </Button>
+          <span className="text-[16px]">NovelFlow</span>
+        </div>
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={() => onTheme(next)}
+          aria-label={`${label} — กดเพื่อเปลี่ยน`}
+          title={label}
+        >
+          {theme === "dark" ? <Moon size={18} /> : theme === "light" ? <Sun size={18} /> : <ScrollText size={18} />}
+        </Button>
+        <Button variant="ghost" size="icon" onClick={onLibrary} aria-label="ตอนที่เปิดล่าสุด">
+          <History size={18} />
+        </Button>
+        <Button variant="ghost" size="icon" onClick={onSettings} aria-label="ตั้งค่า" className="relative">
+          <Settings2 size={18} />
+          {needsKey ? (
+            <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-[var(--accent)] ring-2 ring-[var(--bg)]" />
+          ) : null}
+        </Button>
+        <button
+          onClick={onAccount}
+          aria-label="บัญชี"
+          className="ml-1 grid h-9 w-9 place-items-center rounded-full bg-[var(--accent-soft)] text-[14px] font-semibold uppercase text-[var(--accent)] transition-colors hover:bg-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
+        >
+          {username ? username.slice(0, 1) : "?"}
+        </button>
+      </div>
     </header>
   );
 }
 
-/** Shows a background translation from the home screen, with a way into it. */
+/** Shows a background translation from anywhere, with a way into it. */
 function JobBanner({
   title,
   label,
@@ -1192,6 +1413,7 @@ function JobBanner({
   waiting,
   onOpen,
   onStop,
+  floating,
 }: {
   title: string;
   label: string;
@@ -1200,15 +1422,23 @@ function JobBanner({
   waiting: number;
   onOpen?: () => void;
   onStop: () => void;
+  /** pinned to the bottom of the screen rather than inline */
+  floating?: boolean;
 }) {
   return (
-    <div className="mx-auto w-full max-w-[680px] px-5 pb-8">
-      <div className="rise flex items-center gap-3 rounded-2xl border border-[var(--accent)]/35 bg-[var(--accent-soft)] p-3.5">
+    <div
+      className={
+        floating
+          ? "fixed inset-x-0 bottom-0 z-40 mx-auto w-full max-w-[680px] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          : "mx-auto w-full max-w-[1080px] px-4 pb-6 sm:px-6"
+      }
+    >
+      <div className="rise flex items-center gap-3 rounded-2xl border border-[var(--accent-line)] bg-[var(--bg-elev)] p-3 shadow-[0_12px_32px_-12px_rgba(0,0,0,.45)]">
         <Loader2 size={18} className="shrink-0 animate-spin text-[var(--accent)]" />
 
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13.5px] font-medium">{title}</p>
-          <p className="mt-0.5 text-[12px] text-[var(--accent)]">
+          <p className="mt-0.5 truncate text-[12px] text-[var(--accent)]">
             {label}
             {waiting > 0 ? ` · รออีก ${waiting} ตอน` : ""}
           </p>
@@ -1230,62 +1460,6 @@ function JobBanner({
         </Button>
       </div>
     </div>
-  );
-}
-
-function Sheets(props: {
-  showSettings: boolean;
-  setShowSettings: (v: boolean) => void;
-  showType: boolean;
-  setShowType: (v: boolean) => void;
-  showGlossary: boolean;
-  setShowGlossary: (v: boolean) => void;
-  showLibrary: boolean;
-  setShowLibrary: (v: boolean) => void;
-  showAccount: boolean;
-  setShowAccount: (v: boolean) => void;
-  chapter: Chapter | null;
-  glossarySeries: Series | null;
-  setGlossary: (g: GlossaryEntry[]) => void;
-  retranslate: () => void;
-  library: Chapter[];
-  openChapter: (id: string) => void;
-  removeChapter: (id: string) => void;
-  setLibrary: (c: Chapter[]) => void;
-  push: (message: string, tone?: "info" | "error" | "success") => void;
-  onSignedOut: () => void;
-}) {
-  return (
-    <>
-      <SettingsSheet
-        open={props.showSettings}
-        onClose={() => props.setShowSettings(false)}
-      />
-      <TypographySheet open={props.showType} onClose={() => props.setShowType(false)} />
-      <GlossarySheet
-        open={props.showGlossary}
-        onClose={() => props.setShowGlossary(false)}
-        seriesName={props.glossarySeries?.name ?? null}
-        glossary={props.glossarySeries?.glossary ?? []}
-        onChange={props.setGlossary}
-        onRetranslate={props.retranslate}
-      />
-      <LibrarySheet
-        open={props.showLibrary}
-        onClose={() => props.setShowLibrary(false)}
-        chapters={props.library}
-        currentId={props.chapter?.id ?? null}
-        onOpenChapter={props.openChapter}
-        onDelete={props.removeChapter}
-        onRefresh={() => void listChapters().then(props.setLibrary)}
-      />
-      <AccountSheet
-        open={props.showAccount}
-        onClose={() => props.setShowAccount(false)}
-        onNotify={props.push}
-        onSignedOut={props.onSignedOut}
-      />
-    </>
   );
 }
 
@@ -1332,10 +1506,8 @@ function CostGate({
             </div>
           </dl>
           <p className="text-[12px] leading-relaxed text-[var(--fg-dim)]">
-            {estimate.usd === null
-              ? "ประเมินราคาได้เฉพาะโมเดล Claude — โมเดลอื่นให้ดูอัตราจากผู้ให้บริการ"
-              : "เป็นตัวเลขประมาณจากราคาป้ายของ Anthropic ค่าจริงอาจต่างเล็กน้อย"}
-            {" "}หยุดกลางคันได้ทุกเมื่อ ส่วนที่แปลไปแล้วจะถูกเก็บไว้
+            เป็นตัวเลขประมาณจากราคาป้ายของ Anthropic ค่าจริงอาจต่างเล็กน้อย
+            หยุดกลางคันได้ทุกเมื่อ ส่วนที่แปลไปแล้วจะถูกเก็บไว้
           </p>
         </div>
       }

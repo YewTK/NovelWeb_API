@@ -44,11 +44,13 @@ async function anthropicModels(config: ProviderConfig): Promise<RemoteModel[]> {
 }
 
 async function googleModels(config: ProviderConfig): Promise<RemoteModel[]> {
-  const url =
-    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200&key=" +
-    encodeURIComponent(config.apiKey);
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  const res = await fetch(
+    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200",
+    {
+      headers: { "x-goog-api-key": config.apiKey },
+      signal: AbortSignal.timeout(20000),
+    },
+  );
   if (!res.ok) await readError(res);
 
   const json = (await res.json()) as {

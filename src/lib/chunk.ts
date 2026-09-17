@@ -13,8 +13,10 @@ export interface Chunk {
 // Bigger batches give the model more surrounding story per call and cut the
 // number of round trips; the system prompt is cached, so the only thing a
 // larger chunk costs is a slightly longer stream before the first paragraph.
-const TARGET_TOKENS = 1600;
-const HARD_MAX_UNITS = 30;
+// Fewer, larger requests also matter for rate limits: a free Gemini key allows
+// only a handful of requests a minute, so every round trip saved counts.
+const TARGET_TOKENS = 2200;
+const HARD_MAX_UNITS = 40;
 
 /**
  * Groups paragraphs into batches small enough that the model reliably keeps
@@ -22,13 +24,17 @@ const HARD_MAX_UNITS = 30;
  * A paragraph is never split across chunks.
  */
 export function buildChunks(paragraphs: string[]): Chunk[] {
+  return chunkUnits(paragraphs.map((text, id) => ({ id, text })));
+}
+
+/** Same grouping for an arbitrary subset of paragraphs, keeping their ids. */
+export function chunkUnits(units: ChunkUnit[]): Chunk[] {
   const chunks: Chunk[] = [];
   let current: ChunkUnit[] = [];
   let budget = 0;
 
-  paragraphs.forEach((text, i) => {
-    const unit: ChunkUnit = { id: i, text };
-    const cost = estimateTokens(text);
+  for (const unit of units) {
+    const cost = estimateTokens(unit.text);
 
     if (
       current.length > 0 &&
@@ -41,7 +47,7 @@ export function buildChunks(paragraphs: string[]): Chunk[] {
 
     current.push(unit);
     budget += cost;
-  });
+  }
 
   if (current.length) chunks.push({ index: chunks.length, units: current });
   return chunks;
