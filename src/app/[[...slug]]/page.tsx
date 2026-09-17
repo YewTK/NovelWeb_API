@@ -63,6 +63,14 @@ import {
 import { runGlossaryPass, runTranslation, type KeyRing } from "@/lib/translator";
 import type { Chapter, ExtractResult, GlossaryEntry, Series } from "@/lib/types";
 import { normalizeUrl, urlKey } from "@/lib/utils";
+import {
+  UNSORTED_SLUG,
+  bookPath,
+  chapterPath,
+  parsePath,
+  resolveBook,
+  resolveChapter,
+} from "@/lib/route";
 
 /** Where the translation job is. Fetching a page is tracked separately. */
 type Phase = "idle" | "preparing" | "translating";
@@ -187,6 +195,9 @@ export default function Page() {
 
   const refreshShelves = useCallback(async () => {
     const [chapters, novels] = await Promise.all([listChapters(), listSeries()]);
+    // Refs first: routing resolves against them before the next render.
+    libraryRef.current = chapters;
+    allSeriesRef.current = novels;
     setLibrary(chapters);
     setAllSeries(novels);
   }, []);
@@ -208,16 +219,44 @@ export default function Page() {
   /* ------------------------------ navigation ------------------------------ */
 
   /**
-   * The novel page and the reader each take a history entry, so the phone's
-   * back gesture steps out of them instead of leaving the site.
+   * Every screen has its own address — `/` the shelf, `/<novel>` a novel,
+   * `/<novel>/<chapter>` a chapter — so a refresh, a shared link or the phone's
+   * back gesture lands exactly where the reader was.
    */
-  const pushLayer = (layer: "book" | "read") => {
+  const writeUrl = useCallback((path: string, mode: "push" | "replace") => {
     try {
-      window.history.pushState({ nf: layer }, "");
+      if (window.location.pathname === path) return;
+      if (mode === "push") window.history.pushState({ nf: true }, "", path);
+      else window.history.replaceState(window.history.state, "", path);
     } catch {
       /* sandboxed iframe */
     }
-  };
+  }, []);
+
+  const siblingsOf = useCallback((seriesId: string) => {
+    const all = allSeriesRef.current;
+    const known = Boolean(seriesId) && all.some((s) => s.id === seriesId);
+    return libraryRef.current.filter((c) =>
+      known ? c.seriesId === seriesId : !c.seriesId || !all.some((s) => s.id === c.seriesId),
+    );
+  }, []);
+
+  const pathForBook = useCallback(
+    (key: string) => {
+      const novel = key === ORPHANS ? null : seriesById(key);
+      return novel ? bookPath(novel, allSeriesRef.current) : `/${UNSORTED_SLUG}`;
+    },
+    [seriesById],
+  );
+
+  const pathForChapter = useCallback(
+    (c: Chapter) =>
+      chapterPath(c, seriesById(c.seriesId), allSeriesRef.current, siblingsOf(c.seriesId)),
+    [seriesById, siblingsOf],
+  );
+
+  /** The novel-page key a chapter belongs under. */
+  const bookKeyOf = (c: Chapter) => (seriesById(c.seriesId) ? c.seriesId : ORPHANS);
 
   const leaveChapter = useCallback(() => {
     commitReading(clearCurrent(readingRef.current), true);
@@ -231,74 +270,155 @@ export default function Page() {
     requestAnimationFrame(() => window.scrollTo({ top: scrollMemo.current.home }));
   }, []);
 
-  useEffect(() => {
-    const onPop = () => {
-      if (chapterRef.current) leaveChapter();
-      else if (bookIdRef.current) leaveBook();
-    };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
-  }, [leaveChapter, leaveBook]);
-
-  /** On-screen back buttons walk the same history the gesture does. */
-  const goBack = (fallback: () => void) => {
-    if ((window.history.state as { nf?: string } | null)?.nf) window.history.back();
-    else fallback();
-  };
-
-  const openBook = (id: string) => {
-    scrollMemo.current.home = window.scrollY;
-    setBookId(id || ORPHANS);
-    pushLayer("book");
-    window.scrollTo({ top: 0 });
-  };
-
-  const openChapter = useCallback(
-    async (id: string) => {
+  /** Shows a chapter without touching the address bar. */
+  const showChapter = useCallback(
+    async (id: string): Promise<Chapter | null> => {
       const found = await getChapter(id);
-      if (!found) return;
-      // Moving between chapters swaps the page in place; entering the reader
-      // from outside adds a history entry to come back to.
+      if (!found) return null;
       if (!chapterRef.current) {
         if (bookIdRef.current) scrollMemo.current.book = window.scrollY;
         else scrollMemo.current.home = window.scrollY;
-        pushLayer("read");
       }
       setChapter(found);
       setProgress(found.progress);
       commitReading(openChapterMark(readingRef.current, id), true);
       window.scrollTo({ top: 0 });
+      return found;
     },
     [commitReading],
   );
 
+  /**
+   * Opens a chapter and gives it its URL. Entering the reader adds a history
+   * entry; moving between chapters replaces it, so "back" returns to the page
+   * the reader came from rather than walking every chapter in reverse.
+   */
+  const openChapter = useCallback(
+    async (id: string) => {
+      const entering = !chapterRef.current;
+      const found = await showChapter(id);
+      if (found) writeUrl(pathForChapter(found), entering ? "push" : "replace");
+    },
+    [showChapter, writeUrl, pathForChapter],
+  );
+
+  const openBook = (id: string) => {
+    const key = id || ORPHANS;
+    scrollMemo.current.home = window.scrollY;
+    setBookId(key);
+    writeUrl(pathForBook(key), "push");
+    window.scrollTo({ top: 0 });
+  };
+
+  /** Puts the screen in line with an address — on load, refresh and back/forward. */
+  const applyRoute = useCallback(
+    /**
+     * @param quiet on a miss, report false instead of warning and redirecting —
+     *   used against the local cache before the cloud library has arrived
+     * @returns whether the address was fully resolved
+     */
+    async (pathname: string, quiet = false): Promise<boolean> => {
+      const { book, chapter: segment } = parsePath(pathname);
+
+      if (!book) {
+        if (chapterRef.current) leaveChapter();
+        if (bookIdRef.current) leaveBook();
+        return true;
+      }
+
+      const target = resolveBook(book, allSeriesRef.current);
+      if (target === null) {
+        if (quiet) return false;
+        push("ไม่พบนิยายเรื่องนี้ในชั้นหนังสือ", "error");
+        setChapter(null);
+        setBookId(null);
+        writeUrl("/", "replace");
+        return false;
+      }
+
+      const key = target === "" ? ORPHANS : target.id;
+
+      if (!segment) {
+        setBookId(key);
+        if (chapterRef.current) leaveChapter();
+        return true;
+      }
+
+      const found = resolveChapter(segment, siblingsOf(target === "" ? "" : target.id));
+      if (!found) {
+        if (quiet) return false;
+        setBookId(key);
+        push("ไม่พบตอนนี้ในเรื่องนี้", "error");
+        if (chapterRef.current) leaveChapter();
+        writeUrl(pathForBook(key), "replace");
+        return false;
+      }
+      setBookId(key);
+      if (chapterRef.current?.id !== found.id) await showChapter(found.id);
+      return true;
+    },
+    [leaveChapter, leaveBook, push, writeUrl, siblingsOf, pathForBook, showChapter],
+  );
+
+  useEffect(() => {
+    const onPop = () => void applyRoute(window.location.pathname);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [applyRoute]);
+
+  const inAppHistory = () =>
+    Boolean((window.history.state as { nf?: boolean } | null)?.nf);
+
+  /** Reader's back button: the history entry if we made one, else up to the novel. */
+  const backFromChapter = () => {
+    const current = chapterRef.current;
+    if (inAppHistory()) {
+      window.history.back();
+      return;
+    }
+    leaveChapter();
+    if (current) {
+      const key = bookKeyOf(current);
+      setBookId(key);
+      writeUrl(pathForBook(key), "replace");
+    }
+  };
+
+  const backFromBook = () => {
+    if (inAppHistory()) {
+      window.history.back();
+      return;
+    }
+    leaveBook();
+    writeUrl("/", "replace");
+  };
+
   /** Pulls this reader's library down and shows what was inherited, if anything. */
   const loadLibrary = useCallback(async () => {
-    await refreshShelves();
-    await pullChapters();
-    await pullSeries();
     await refreshShelves();
 
     const saved = await loadReading();
     readingRef.current = saved;
     setReading(saved);
 
+    // Open whatever the address points at — this is what keeps a refresh on
+    // the same novel or chapter. The device cache answers instantly; only a
+    // link to something not synced here yet has to wait for the cloud.
+    const routing = !restored.current;
+    restored.current = true;
+    const resolved = routing ? await applyRoute(window.location.pathname, true) : true;
+
+    await pullChapters();
+    await pullSeries();
+    await refreshShelves();
+
     const adopted = consumeAdoptionNotice();
     if (adopted > 0) {
       push(`ย้ายชั้นหนังสือเดิมเข้าบัญชีนี้แล้ว ${adopted} ตอน`, "success");
     }
 
-    // Drop the reader back where they were rather than at the front door.
-    if (!restored.current && saved.current) {
-      restored.current = true;
-      const resume = await getChapter(saved.current);
-      if (resume) {
-        pushLayer("read");
-        setChapter(resume);
-        setProgress(resume.progress);
-      }
-    }
-  }, [refreshShelves, push]);
+    if (!resolved) await applyRoute(window.location.pathname);
+  }, [refreshShelves, push, applyRoute]);
 
   useEffect(() => {
     setMounted(true);
@@ -867,7 +987,7 @@ export default function Page() {
     await repoDelete(id);
     commitReading(forgetChapter(readingRef.current, id), true);
     await refreshShelves();
-    if (chapterRef.current?.id === id) goBack(leaveChapter);
+    if (chapterRef.current?.id === id) backFromChapter();
   };
 
   const openGlossaryFor = (id: string | null | undefined) => {
@@ -899,6 +1019,10 @@ export default function Page() {
     setInfoSeriesId(null);
     if (!target) return;
     await updateSeries({ ...target, name: draft.name || target.name, info: draft.info });
+    // A new name means a new address; keep the bar in step with it.
+    const open = chapterRef.current;
+    if (open && open.seriesId === target.id) writeUrl(pathForChapter(open), "replace");
+    else if (bookIdRef.current === target.id) writeUrl(pathForBook(target.id), "replace");
     push("บันทึกข้อมูลหนังสือแล้ว", "success");
   };
 
@@ -1015,7 +1139,7 @@ export default function Page() {
     commitReading(marks, true);
 
     if (shelfId === target.series.id) setShelfId("");
-    goBack(leaveBook);
+    backFromBook();
     await refreshShelves();
     push(`ลบ “${target.series.name}” แล้ว`, "success");
   };
@@ -1038,6 +1162,7 @@ export default function Page() {
     );
 
     await refreshShelves();
+    writeUrl(pathForBook(targetId), "replace");
     push(`รวมเข้า “${merged.name}” แล้ว`, "success");
   };
 
@@ -1098,6 +1223,7 @@ export default function Page() {
     setGlossarySeriesId(null);
     setInfoSeriesId(null);
     setShelfId("");
+    writeUrl("/", "replace");
     restored.current = false;
     readingRef.current = { marks: {}, current: null };
     setReading({ marks: {}, current: null });
@@ -1181,7 +1307,7 @@ export default function Page() {
           width={reader.maxWidth}
           showSource={reader.showSource}
           // Going back leaves the translation running in the background.
-          onBack={() => goBack(leaveChapter)}
+          onBack={backFromChapter}
           onStop={stop}
           onToggleSource={() => setReader({ showSource: !reader.showSource })}
           onGlossary={() => openGlossaryFor(chapter.seriesId)}
@@ -1251,7 +1377,7 @@ export default function Page() {
           currentId={reading.current}
           jobId={job?.id ?? null}
           queuedIds={queuedIds}
-          onBack={() => goBack(leaveBook)}
+          onBack={backFromBook}
           onOpenChapter={(id) => void openChapter(id)}
           onOpenGlossary={() => openGlossaryFor(openShelf.series.id)}
           onEditInfo={() => setInfoSeriesId(openShelf.series.id || null)}
