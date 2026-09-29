@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   BookOpen,
   Check,
@@ -11,7 +11,7 @@ import {
   RefreshCw,
   Trash2,
 } from "lucide-react";
-import type { Chapter } from "@/lib/types";
+import type { ChapterMeta } from "@/lib/types";
 import { useSettings, type ReaderPrefs, type ThemeName } from "@/lib/store";
 import { cn, formatRelative, hostOf } from "@/lib/utils";
 import {
@@ -19,9 +19,9 @@ import {
   pullChapters,
   pushAllLocal,
   signOutCloud,
-  subscribeCloud,
   type CloudStatus,
 } from "@/lib/repo";
+import { useCloudState } from "@/lib/useCloud";
 import { Button, Field, Segmented, Sheet, Slider, Switch } from "./ui";
 
 /* ------------------------------- Typography ------------------------------ */
@@ -155,7 +155,7 @@ export function LibrarySheet({
 }: {
   open: boolean;
   onClose: () => void;
-  chapters: Chapter[];
+  chapters: ChapterMeta[];
   currentId: string | null;
   onOpenChapter: (id: string) => void;
   onDelete: (id: string) => void;
@@ -175,7 +175,7 @@ export function LibrarySheet({
       open={open}
       onClose={onClose}
       title="ห้องสมุดของฉัน"
-      description={`${chapters.length} ตอนที่แปลไว้`}
+      description={`${chapters.length} ตอน เรียงตามที่อัปเดตล่าสุด`}
     >
       <div className="space-y-2">
         <Button
@@ -183,7 +183,7 @@ export function LibrarySheet({
           size="sm"
           className="mb-1 w-full"
           onClick={refresh}
-          disabled={refreshing}
+          disabled={refreshing || cloudSnapshot().status === "disabled"}
         >
           {refreshing ? (
             <Loader2 size={14} className="animate-spin" />
@@ -198,13 +198,13 @@ export function LibrarySheet({
             ยังไม่มีตอนที่แปล
           </p>
         ) : (
-          chapters.map((c) => (
+          chapters.slice(0, 200).map((c) => (
             <div
               key={c.id}
               className={cn(
                 "group flex items-start gap-3 rounded-xl border p-3 transition-all",
                 c.id === currentId
-                  ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                  ? "border-[var(--accent-line)] bg-[var(--accent-soft)]"
                   : "border-[var(--line)] bg-[var(--bg)] hover:border-[var(--fg-dim)]",
               )}
             >
@@ -231,7 +231,7 @@ export function LibrarySheet({
               <button
                 onClick={() => onDelete(c.id)}
                 aria-label="ลบตอนนี้"
-                className="shrink-0 rounded-lg p-1.5 text-[var(--fg-dim)] opacity-0 transition-all hover:bg-red-500/10 hover:text-red-400 focus-visible:opacity-100 group-hover:opacity-100"
+                className="shrink-0 rounded-lg p-1.5 text-[var(--fg-dim)] transition-all hover:bg-[color-mix(in_oklab,var(--danger)_12%,transparent)] hover:text-[var(--danger)] focus-visible:opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
               >
                 <Trash2 size={14} />
               </button>
@@ -254,11 +254,7 @@ const STATUS_TEXT: Record<CloudStatus, string> = {
   error: "เชื่อมต่อคลาวด์ไม่ได้",
 };
 
-export function useCloudState() {
-  const [state, setState] = useState(cloudSnapshot);
-  useEffect(() => subscribeCloud(() => setState(cloudSnapshot())), []);
-  return state;
-}
+export { useCloudState } from "@/lib/useCloud";
 
 export function AccountSheet({
   open,
@@ -273,6 +269,7 @@ export function AccountSheet({
 }) {
   const { status, username } = useCloudState();
   const [working, setWorking] = useState(false);
+  const localOnly = status === "disabled";
 
   return (
     <Sheet
@@ -288,11 +285,11 @@ export function AccountSheet({
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate text-[15px] font-semibold">
-              {username ?? "ยังไม่ได้เข้าสู่ระบบ"}
+              {localOnly ? "ผู้อ่านในเครื่องนี้" : (username ?? "ยังไม่ได้เข้าสู่ระบบ")}
             </p>
             <p className="mt-0.5 flex items-center gap-1.5 text-[12px] text-[var(--fg-dim)]">
               {status === "ready" ? (
-                <Cloud size={12} className="text-emerald-400" />
+                <Cloud size={12} className="text-[var(--success)]" />
               ) : (
                 <CloudOff size={12} />
               )}
@@ -301,6 +298,7 @@ export function AccountSheet({
           </div>
         </div>
 
+        {localOnly ? null : (
         <div className="space-y-2">
           <Button
             variant="outline"
@@ -337,10 +335,11 @@ export function AccountSheet({
             <LogOut size={15} /> ออกจากระบบ
           </Button>
         </div>
+        )}
 
         <div className="rounded-xl border border-[var(--line)] bg-[var(--bg)] p-3.5">
           <p className="flex items-center gap-2 text-[13px] font-medium">
-            <Check size={14} className="text-emerald-400" /> API Key ไม่ถูกส่งขึ้นคลาวด์
+            <Check size={14} className="text-[var(--success)]" /> API Key ไม่ถูกส่งขึ้นคลาวด์
           </p>
           <p className="mt-1.5 text-[12px] leading-relaxed text-[var(--fg-dim)]">
             คีย์ของคุณอยู่ใน localStorage ของเบราว์เซอร์เท่านั้น

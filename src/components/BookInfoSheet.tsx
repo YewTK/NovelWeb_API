@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { ImagePlus, Loader2, Trash2, X } from "lucide-react";
+import { coverFromFile } from "@/lib/image";
 import type { BookInfo, Series } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Cover } from "./Bookshelf";
 import { Button, Field, Segmented, Sheet, inputClass } from "./ui";
 
 const GENRE_SUGGESTIONS = [
@@ -57,6 +59,21 @@ export function BookInfoSheet({
   }, [series]);
 
   const patch = (p: Partial<BookInfo>) => setInfo((i) => ({ ...i, ...p }));
+
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [loadingCover, setLoadingCover] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
+
+  const pickFile = async (file: File) => {
+    setCoverError(null);
+    setLoadingCover(true);
+    try {
+      patch({ cover: await coverFromFile(file) });
+    } catch (e) {
+      setCoverError(e instanceof Error ? e.message : "ใช้รูปนี้ไม่ได้");
+    }
+    setLoadingCover(false);
+  };
   const genres = info.genres ?? [];
 
   const addGenre = (g: string) => {
@@ -74,8 +91,12 @@ export function BookInfoSheet({
       status: info.status || undefined,
       sourceLanguage: info.sourceLanguage?.trim() || undefined,
       synopsis: info.synopsis?.trim() || undefined,
+      blurb: info.blurb?.trim() || undefined,
+      // Studio novels keep their plan; this sheet never edits it.
+      project: series?.info?.project,
       translatorNotes: info.translatorNotes?.trim() || undefined,
       sourceUrl: info.sourceUrl?.trim() || undefined,
+      cover: info.cover?.trim() || undefined,
     };
     onSave({ name: name.trim() || series?.name || "", info: clean });
   };
@@ -98,6 +119,71 @@ export function BookInfoSheet({
       }
     >
       <div className="space-y-5">
+        <div>
+          <p className="mb-2 text-[13px] font-medium text-[var(--fg-muted)]">รูปปก</p>
+          <div className="flex gap-4">
+            <div className="w-[104px] shrink-0">
+              <Cover
+                name={name || series?.name || ""}
+                seed={series?.key || series?.id || ""}
+                author={info.author}
+                image={info.cover}
+                flat
+              />
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col gap-2">
+              <Button
+                variant="outline"
+                className="h-11 w-full"
+                disabled={loadingCover}
+                onClick={() => fileRef.current?.click()}
+              >
+                {loadingCover ? (
+                  <Loader2 size={15} className="animate-spin" />
+                ) : (
+                  <ImagePlus size={15} />
+                )}
+                {info.cover ? "เปลี่ยนรูปจากเครื่อง" : "เลือกรูปจากเครื่อง"}
+              </Button>
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (file) void pickFile(file);
+                }}
+              />
+              <input
+                value={info.cover?.startsWith("data:") ? "" : (info.cover ?? "")}
+                onChange={(e) => patch({ cover: e.target.value.trim() })}
+                placeholder="หรือวางลิงก์รูป https://…"
+                type="url"
+                inputMode="url"
+                className={cn(inputClass, "h-11")}
+              />
+              {info.cover ? (
+                <button
+                  type="button"
+                  onClick={() => patch({ cover: "" })}
+                  className="inline-flex h-9 items-center gap-1.5 self-start rounded-lg px-2 text-[12.5px] text-red-500 hover:bg-red-500/10"
+                >
+                  <Trash2 size={13} /> ลบรูปปก
+                </button>
+              ) : null}
+              {coverError ? (
+                <p className="text-[12px] text-red-500">{coverError}</p>
+              ) : (
+                <p className="text-[11.5px] leading-relaxed text-[var(--fg-dim)]">
+                  ระบบย่อรูปให้อัตโนมัติ แนะนำภาพแนวตั้ง 2:3
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
         <Field label="ชื่อเรื่อง (ภาษาไทย)">
           <input
             value={name}
@@ -208,6 +294,16 @@ export function BookInfoSheet({
             ))}
           </div>
         </div>
+
+        <Field label="คำโปรย" hint="ประโยคเด็ดที่แสดงบนหน้าหนังสือ">
+          <textarea
+            value={info.blurb ?? ""}
+            onChange={(e) => patch({ blurb: e.target.value })}
+            rows={2}
+            placeholder="ประโยคสั้น ๆ ที่ทำให้คนอยากเปิดอ่าน"
+            className={cn(inputClass, "resize-y leading-relaxed")}
+          />
+        </Field>
 
         <Field label="เรื่องย่อ">
           <textarea

@@ -1,54 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import {
-  ArrowRight,
-  ClipboardPaste,
-  Languages,
-  Library,
-  FileUp,
-  Link2,
-  Loader2,
-  Settings2,
-  Sparkles,
-  Type,
-} from "lucide-react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { ArrowRight, ClipboardPaste, FileUp, Languages, Library, Link2, Loader2, Settings2, Type } from "lucide-react";
 import { TARGET_LANGUAGES, providerMeta } from "@/lib/models";
 import { useSettings } from "@/lib/store";
 import { cn, isProbablyUrl } from "@/lib/utils";
 import { ShelfPicker, type ShelfOption } from "./ShelfPicker";
 import { Button } from "./ui";
 
-export function Composer({
-  compact = false,
-  busy,
-  busyLabel,
-  onSubmit,
-  onOpenSettings,
-  shelves,
-  shelfId,
-  onShelfChange,
-  onImportPdf,
-}: {
-  /** the reader already has a bookshelf — keep the box, drop the welcome hero */
-  compact?: boolean;
-  busy: boolean;
-  busyLabel: string;
-  onSubmit: (input: string, kind: "url" | "text") => void;
-  onOpenSettings: () => void;
-  shelves: ShelfOption[];
-  /** empty string means the shelf is derived from the link */
-  shelfId: string;
-  onShelfChange: (id: string) => void;
-  onImportPdf: () => void;
-}) {
+export interface ComposerHandle {
+  focus: () => void;
+}
+
+/** The translate box: a link, a pasted chapter, or a PDF. */
+export const Composer = forwardRef<
+  ComposerHandle,
+  {
+    busy: boolean;
+    busyLabel: string;
+    onSubmit: (input: string, kind: "url" | "text") => void;
+    onOpenSettings: () => void;
+    shelves: ShelfOption[];
+    /** empty string means the shelf is derived from the link */
+    shelfId: string;
+    onShelfChange: (id: string) => void;
+    onImportPdf: () => void;
+  }
+>(function Composer({ busy, busyLabel, onSubmit, onOpenSettings, shelves, shelfId, onShelfChange, onImportPdf }, ref) {
   const [value, setValue] = useState("");
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const { config, style, setStyle } = useSettings();
-  const [mounted, setMounted] = useState(false);
   const [pickingShelf, setPickingShelf] = useState(false);
+  const [focused, setFocused] = useState(false);
 
-  useEffect(() => setMounted(true), []);
+  useImperativeHandle(ref, () => ({
+    focus: () => {
+      areaRef.current?.focus({ preventScroll: true });
+    },
+  }));
 
   const trimmed = value.trim();
   const kind: "url" | "text" = isProbablyUrl(trimmed) ? "url" : "text";
@@ -58,7 +47,7 @@ export function Composer({
     const el = areaRef.current;
     if (!el) return;
     el.style.height = "0px";
-    el.style.height = `${Math.min(el.scrollHeight, 260)}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 240)}px`;
   }, [value]);
 
   const submit = () => {
@@ -81,55 +70,27 @@ export function Composer({
   };
 
   const meta = providerMeta(config.provider);
-  const modelLabel =
-    meta.models.find((m) => m.id === config.model)?.label ?? config.model;
-  const langLabel =
-    TARGET_LANGUAGES.find((l) => l.code === style.targetLanguage)?.label ??
-    style.targetLanguage;
+  const modelLabel = meta.models.find((m) => m.id === config.model)?.label ?? config.model;
   const shelf = shelves.find((s) => s.series.id === shelfId) ?? null;
 
   return (
-    <div
-      className={cn(
-        "mx-auto w-full max-w-[680px] px-4 sm:px-5",
-        compact ? "pb-8 pt-5 sm:pt-8" : "pb-16 pt-[10vh] sm:pt-[14vh]",
-      )}
-    >
-      {compact ? (
-        <p className="mb-2.5 px-1 text-[13px] font-medium text-[var(--fg-muted)]">
-          เพิ่มตอนใหม่ — วางลิงก์หรือเนื้อหา
-        </p>
-      ) : null}
-      <div className={cn("rise mb-9 text-center", compact && "hidden")}>
-        <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg-elev)]/70 px-3.5 py-1.5 text-[12px] text-[var(--fg-muted)] backdrop-blur">
-          <Sparkles size={12} className="text-[var(--accent)]" />
-          แปลด้วย AI ผ่าน API Key ของคุณเอง
-        </div>
-        <h1 className="text-balance text-[34px] font-semibold leading-[1.15] tracking-tight sm:text-[44px]">
-          วางลิงก์นิยาย
-          <br className="sm:hidden" />
-          <span className="text-[var(--accent)]"> อ่านเป็นภาษาไทยทันที</span>
-        </h1>
-        <p className="mx-auto mt-3.5 max-w-[440px] text-balance text-[14.5px] leading-relaxed text-[var(--fg-muted)]">
-          ก็อปลิงก์มาวาง หรือวางเนื้อหาดิบ ๆ ก็ได้ — ระบบจะดึงเนื้อหา
-          ล็อกคำศัพท์เฉพาะให้คงเส้นคงวา แล้วแปลแบบสตรีมทีละย่อหน้า
-        </p>
-      </div>
-
+    <div id="translate" className="scroll-mt-24">
       <div
-        className="rise rounded-[26px] border border-[var(--line)] bg-[var(--bg-elev)]/80 p-2 shadow-[0_24px_60px_-24px_rgba(0,0,0,.55)] backdrop-blur-xl"
-        style={{ animationDelay: "60ms" }}
+        className={cn(
+          "gilded rounded-[26px] bg-[var(--bg-elev)]/75 p-2 shadow-[0_30px_70px_-30px_rgba(0,0,0,.7)] backdrop-blur-xl transition-shadow duration-300",
+          focused && "shadow-[0_30px_70px_-30px_rgba(0,0,0,.7),0_0_0_4px_var(--accent-soft)]",
+        )}
       >
-        <div className="rounded-[20px] bg-[var(--bg)] p-3.5">
+        <div className="rounded-[20px] bg-[var(--bg)]/85 p-3.5">
           <div className="mb-2 flex items-center gap-2 text-[12px] font-medium text-[var(--fg-dim)]">
             {trimmed.length === 0 ? (
               <>
-                <Type size={13} /> วางอะไรก็ได้
+                <Type size={13} /> วางลิงก์ตอนนิยาย หรือเนื้อหาทั้งตอน
               </>
             ) : kind === "url" ? (
               <>
                 <Link2 size={13} className="text-[var(--accent)]" />
-                <span className="text-[var(--accent)]">ตรวจพบลิงก์</span>
+                <span className="text-[var(--accent)]">ตรวจพบลิงก์ — ระบบจะดึงเนื้อหาให้</span>
               </>
             ) : (
               <>
@@ -143,6 +104,8 @@ export function Composer({
             ref={areaRef}
             value={value}
             onChange={(e) => setValue(e.target.value)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
               if (e.key === "Enter" && kind === "url" && !e.shiftKey) {
@@ -152,37 +115,22 @@ export function Composer({
             }}
             rows={1}
             spellCheck={false}
-            placeholder="https://example.com/novel/chapter-1 หรือวางเนื้อหาทั้งตอนตรงนี้…"
-            className="w-full resize-none bg-transparent text-base leading-relaxed outline-none placeholder:text-[var(--fg-dim)] sm:text-[15px]"
+            aria-label="ลิงก์หรือเนื้อหาที่จะแปล"
+            placeholder="https://example.com/novel/chapter-1"
+            className="min-h-[28px] w-full resize-none bg-transparent text-base leading-relaxed outline-none placeholder:text-[var(--fg-dim)] sm:text-[15px]"
             enterKeyHint={kind === "url" ? "go" : "enter"}
           />
 
-          <div className="mt-3 flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={pasteFromClipboard}
-              className="shrink-0"
-            >
+          <div className="mt-3 flex items-center gap-1.5">
+            <Button variant="ghost" size="sm" onClick={pasteFromClipboard} className="shrink-0" aria-label="วางจากคลิปบอร์ด">
               <ClipboardPaste size={14} />
-              <span className="hidden sm:inline">วางจากคลิปบอร์ด</span>
+              <span className="hidden sm:inline">วาง</span>
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onImportPdf}
-              className="shrink-0"
-            >
+            <Button variant="ghost" size="sm" onClick={onImportPdf} className="shrink-0">
               <FileUp size={14} /> PDF
             </Button>
             <div className="flex-1" />
-            <Button
-              variant="primary"
-              size="md"
-              onClick={submit}
-              disabled={!ready || busy}
-              className="min-w-[128px]"
-            >
+            <Button variant="accent-solid" size="md" onClick={submit} disabled={!ready || busy} className="min-w-[124px]">
               {busy ? (
                 <>
                   <Loader2 size={15} className="animate-spin" />
@@ -198,16 +146,14 @@ export function Composer({
         </div>
       </div>
 
-      <div
-        className="rise mt-4 flex flex-wrap items-center justify-center gap-2"
-        style={{ animationDelay: "120ms" }}
-      >
-        <div className="flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-1 py-1">
-          <Languages size={13} className="ml-2 text-[var(--fg-dim)]" />
+      <div className="mt-3.5 flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-0.5 rounded-full border border-[var(--line)] bg-[var(--bg-elev)]/80 p-1">
+          <Languages size={13} className="ml-2 mr-1 text-[var(--fg-dim)]" />
           {TARGET_LANGUAGES.slice(0, 3).map((l) => (
             <button
               key={l.code}
               onClick={() => setStyle({ targetLanguage: l.code })}
+              aria-pressed={style.targetLanguage === l.code}
               className={cn(
                 "rounded-full px-2.5 py-1 text-[12.5px] transition-colors",
                 style.targetLanguage === l.code
@@ -218,13 +164,6 @@ export function Composer({
               {l.label}
             </button>
           ))}
-          {!TARGET_LANGUAGES.slice(0, 3).some(
-            (l) => l.code === style.targetLanguage,
-          ) && (
-            <span className="rounded-full bg-[var(--accent-soft)] px-2.5 py-1 text-[12.5px] font-medium text-[var(--accent)]">
-              {langLabel}
-            </span>
-          )}
         </div>
 
         <button
@@ -232,15 +171,13 @@ export function Composer({
           className={cn(
             "flex items-center gap-2 rounded-full border px-3.5 py-2 text-[12.5px] transition-colors",
             shelf
-              ? "border-[var(--accent)]/45 bg-[var(--accent-soft)] text-[var(--accent)]"
-              : "border-[var(--line)] bg-[var(--bg-elev)] text-[var(--fg-muted)] hover:border-[var(--fg-dim)] hover:text-[var(--fg)]",
+              ? "border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)]"
+              : "border-[var(--line)] bg-[var(--bg-elev)]/70 text-[var(--fg-muted)] hover:text-[var(--fg)]",
           )}
         >
           <Library size={13} />
-          <span className="max-w-[170px] truncate">
-            {mounted && shelf ? shelf.series.name : "เลือกชั้นหนังสือ"}
-          </span>
-          {mounted && shelf && shelf.series.glossary.length > 0 ? (
+          <span className="max-w-[170px] truncate">{shelf ? shelf.series.name : "จัดเข้าชั้นอัตโนมัติ"}</span>
+          {shelf && shelf.series.glossary.length > 0 ? (
             <span className="rounded-md bg-[var(--accent)]/15 px-1.5 py-0.5 text-[10.5px] font-semibold">
               {shelf.series.glossary.length} คำ
             </span>
@@ -249,27 +186,17 @@ export function Composer({
 
         <button
           onClick={onOpenSettings}
-          className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-3.5 py-2 text-[12.5px] text-[var(--fg-muted)] transition-colors hover:border-[var(--fg-dim)] hover:text-[var(--fg)]"
+          className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg-elev)]/80 px-3.5 py-2 text-[12.5px] text-[var(--fg-muted)] transition-colors hover:text-[var(--fg)]"
         >
           <Settings2 size={13} />
-          {mounted ? modelLabel : "โมเดล"}
-          {mounted && !config.apiKey ? (
+          {modelLabel}
+          {!config.apiKey ? (
             <span className="ml-0.5 rounded-md bg-[var(--accent-soft)] px-1.5 py-0.5 text-[10.5px] font-semibold text-[var(--accent)]">
               ต้องใส่คีย์
             </span>
           ) : null}
         </button>
       </div>
-
-      {shelf ? (
-        <p className="rise mt-3 text-center text-[12px] leading-relaxed text-[var(--fg-dim)]">
-          ตอนใหม่จะถูกเก็บเข้าชั้น{" "}
-          <span className="font-medium text-[var(--fg-muted)]">
-            {shelf.series.name}
-          </span>{" "}
-          และใช้คลังคำศัพท์ชุดเดิม
-        </p>
-      ) : null}
 
       <ShelfPicker
         open={pickingShelf}
@@ -280,4 +207,4 @@ export function Composer({
       />
     </div>
   );
-}
+});

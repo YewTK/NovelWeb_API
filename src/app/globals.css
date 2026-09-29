@@ -1,107 +1,134 @@
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "IBM Plex Sans Thai", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-serif: "Noto Serif Thai", ui-serif, Georgia, "Times New Roman", serif;
-  --font-loop: "Sarabun", "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
-  --font-modern: "Kanit", "IBM Plex Sans Thai", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: var(--font-plex), "IBM Plex Sans Thai", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-serif: var(--font-noto-serif), "Noto Serif Thai", ui-serif, Georgia, serif;
+  --font-loop: var(--font-sarabun), "Sarabun", var(--font-plex), ui-sans-serif, sans-serif;
+  --font-modern: var(--font-kanit), "Kanit", var(--font-plex), ui-sans-serif, sans-serif;
+  /* Latin display for the brand and numerals; Thai glyphs fall through to the serif. */
+  --font-display: var(--font-cinzel), var(--font-noto-serif), "Noto Serif Thai", ui-serif, serif;
   --font-mono: ui-monospace, "Cascadia Code", "Segoe UI Mono", monospace;
 
   --radius-4xl: 2rem;
 }
 
 /*
- * Surfaces are neutral; the only colour is a warm accent used sparingly for
- * highlights. Solid buttons are ink — near-white on dark, near-black on light —
- * which keeps them calm next to long-form prose instead of shouting over it.
+ * "Midnight library": ink-blue night, candle gold for anything that matters,
+ * and a violet/teal arcane glow reserved for the 3D scenes and live states.
+ * Prose surfaces stay calm — the colour lives in the frame, not the page.
  */
 :root {
   color-scheme: dark;
 
-  --bg: #0b0c0e;
-  --bg-elev: #141619;
-  --bg-elev-2: #1d2026;
-  --line: #2b2f36;
-  --line-soft: #1f2228;
-  --fg: #e9eaec;
-  --fg-muted: #9ba1aa;
-  --fg-dim: #6d737d;
+  --bg: #07080d;
+  --bg-elev: #0e1018;
+  --bg-elev-2: #161926;
+  --bg-glass: rgb(14 16 24 / 0.72);
+  --line: #262a3b;
+  --line-soft: #1a1d2b;
+  --fg: #efe9dc;
+  --fg-muted: #a9a5b6;
+  --fg-dim: #6f6b82;
 
-  --accent: #ff6b6b;
-  /* solid fills that carry white text */
-  --accent-strong: #e5484d;
-  --accent-soft: #ff6b6b1f;
-  --accent-line: #ff6b6b59;
-  --ring: #ff6b6b66;
+  --accent: #e9b95c;
+  --accent-strong: #e2a93f;
+  --accent-ink: #1b1305;
+  --accent-soft: #e9b95c1c;
+  --accent-line: #e9b95c55;
+  --ring: #e9b95c77;
 
-  --btn: #f2f3f5;
-  --btn-fg: #0b0c0e;
+  --magic: #8f7cff;
+  --magic-2: #4fd6c8;
+  --danger: #ff6b6b;
+  --success: #3ecf8e;
+
+  --btn: #f3eee3;
+  --btn-fg: #0b0c12;
   --btn-hover: #ffffff;
 
-  --reader-bg: #0c0d10;
-  --reader-fg: #dfe1e5;
-  --reader-quiet: #7d838d;
+  --reader-bg: #0a0b11;
+  --reader-fg: #e2ddd2;
+  --reader-quiet: #7f7b90;
+
+  --shadow-card: 0 18px 40px -22px rgb(0 0 0 / 0.8);
+  --glow: 0 0 0 1px var(--accent-line), 0 12px 40px -12px color-mix(in oklab, var(--accent) 45%, transparent);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --bg: #fbfaf9;
-  --bg-elev: #ffffff;
-  --bg-elev-2: #f3f1ef;
-  --line: #e4e1dd;
-  --line-soft: #eeecea;
-  --fg: #1a1917;
-  --fg-muted: #5f5b55;
-  --fg-dim: #8b867f;
+  --bg: #f7f3ea;
+  --bg-elev: #fffdf8;
+  --bg-elev-2: #f0eadd;
+  --bg-glass: rgb(255 253 248 / 0.78);
+  --line: #e2d9c7;
+  --line-soft: #ece5d7;
+  --fg: #1f1a13;
+  --fg-muted: #5f574a;
+  --fg-dim: #8c8372;
 
-  --accent: #d63a44;
-  --accent-strong: #d63a44;
-  --accent-soft: #d63a4414;
-  --accent-line: #d63a444d;
-  --ring: #d63a4455;
+  --accent: #9a6a12;
+  --accent-strong: #b7811f;
+  --accent-ink: #fffaf0;
+  --accent-soft: #b7811f17;
+  --accent-line: #b7811f4d;
+  --ring: #b7811f66;
 
-  --btn: #1a1917;
-  --btn-fg: #fbfaf9;
+  --magic: #6b58e6;
+  --magic-2: #178f86;
+  --danger: #d23b3b;
+  --success: #1f9d63;
+
+  --btn: #1f1a13;
+  --btn-fg: #fbf7ee;
   --btn-hover: #000000;
 
-  --reader-bg: #ffffff;
-  --reader-fg: #1c1b19;
-  --reader-quiet: #6e6963;
+  --reader-bg: #fffdf8;
+  --reader-fg: #221d16;
+  --reader-quiet: #756c5d;
+
+  --shadow-card: 0 18px 36px -24px rgb(60 40 10 / 0.45);
 }
 
 :root[data-theme="sepia"] {
   color-scheme: light;
 
-  --bg: #efe6d6;
-  --bg-elev: #fbf4e6;
-  --bg-elev-2: #f2e8d6;
-  --line: #ddd0b8;
-  --line-soft: #e7dcc8;
-  --fg: #2f2618;
-  --fg-muted: #6a5b45;
-  --fg-dim: #8b7b63;
+  --bg: #ede2cc;
+  --bg-elev: #f8f0df;
+  --bg-elev-2: #efe3cb;
+  --bg-glass: rgb(248 240 223 / 0.8);
+  --line: #d8c7a6;
+  --line-soft: #e3d5b9;
+  --fg: #2f2416;
+  --fg-muted: #685740;
+  --fg-dim: #8e7c60;
 
-  --accent: #b23a39;
-  --accent-strong: #b23a39;
-  --accent-soft: #b23a3914;
-  --accent-line: #b23a394d;
-  --ring: #b23a3955;
+  --accent: #8e3b1f;
+  --accent-strong: #a8492a;
+  --accent-ink: #fff6ea;
+  --accent-soft: #a8492a17;
+  --accent-line: #a8492a4d;
+  --ring: #a8492a55;
 
-  --btn: #3a2e1c;
-  --btn-fg: #f7efdf;
-  --btn-hover: #2a2114;
+  --magic: #7a4fb8;
+  --magic-2: #2f8a78;
+  --danger: #b23a39;
+  --success: #3f8a4f;
 
-  --reader-bg: #f7efdf;
-  --reader-fg: #302716;
+  --btn: #3a2c1a;
+  --btn-fg: #f8efdf;
+  --btn-hover: #2a1f12;
+
+  --reader-bg: #f6ecd8;
+  --reader-fg: #302616;
   --reader-quiet: #7a6a52;
+
+  --shadow-card: 0 18px 36px -24px rgb(70 45 15 / 0.5);
 }
 
 * { border-color: var(--line); }
 
-html, body {
-  height: 100%;
-}
+html, body { min-height: 100%; }
 
 body {
   background: var(--bg);
@@ -113,28 +140,10 @@ body {
   overscroll-behavior-y: none;
 }
 
-/* Lucide draws at stroke-width 2, which is heavy at 14-18px. */
-svg.lucide {
-  stroke-width: 1.75;
-}
+/* Lucide draws at stroke-width 2, which is heavy at 14–18px. */
+svg.lucide { stroke-width: 1.75; }
 
-/* A barely-there warm wash, not a light show. */
-.aurora::before {
-  content: "";
-  position: fixed;
-  inset: -20% -10% auto -10%;
-  height: 46vh;
-  pointer-events: none;
-  z-index: 0;
-  background: radial-gradient(
-    48rem 24rem at 50% 0%,
-    color-mix(in oklab, var(--accent) 9%, transparent),
-    transparent 72%
-  );
-  opacity: 0.7;
-}
-
-::selection { background: color-mix(in oklab, var(--accent) 30%, transparent); }
+::selection { background: color-mix(in oklab, var(--accent) 32%, transparent); }
 
 /* Scrollbars */
 * { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
@@ -147,26 +156,165 @@ svg.lucide {
 }
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-dim); background-clip: content-box; }
 
-/* Focus */
 :where(button, a, input, textarea, select, [tabindex]):focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: 2px;
-  border-radius: 8px;
+  border-radius: 10px;
 }
+
+/* ------------------------------ atmosphere ------------------------------- */
+
+/*
+ * The page's own night sky: two soft pools of light and a faint grain. Pure
+ * CSS so it is there on first paint, long before any 3D scene has loaded.
+ */
+.atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(60rem 32rem at 78% -8%, color-mix(in oklab, var(--magic) 16%, transparent), transparent 70%),
+    radial-gradient(48rem 30rem at 8% 4%, color-mix(in oklab, var(--accent) 11%, transparent), transparent 70%),
+    radial-gradient(70rem 40rem at 50% 115%, color-mix(in oklab, var(--magic-2) 7%, transparent), transparent 70%);
+}
+:root[data-theme="light"] .atmosphere,
+:root[data-theme="sepia"] .atmosphere { opacity: 0.7; }
+
+.grain::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  /* Plain alpha, not a blend mode: a full-screen blend layer over a live
+     WebGL canvas makes the compositor redo the whole screen every frame. */
+  opacity: 0.035;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='140' height='140'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+}
+
+.glass {
+  background: var(--bg-glass);
+  -webkit-backdrop-filter: saturate(1.4) blur(18px);
+  backdrop-filter: saturate(1.4) blur(18px);
+}
+
+/* A gilded hairline, like the edge of a well-bound book. */
+.gilded {
+  position: relative;
+  isolation: isolate;
+}
+.gilded::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    140deg,
+    color-mix(in oklab, var(--accent) 70%, transparent),
+    transparent 30%,
+    transparent 70%,
+    color-mix(in oklab, var(--magic) 55%, transparent)
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.text-gilded {
+  background: linear-gradient(100deg, var(--accent) 0%, color-mix(in oklab, var(--accent) 60%, #fff) 45%, var(--accent) 60%, var(--magic) 120%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.ornament {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--fg-dim);
+}
+.ornament::before,
+.ornament::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: linear-gradient(90deg, transparent, var(--line), transparent);
+}
+
+/* ------------------------------ book covers ------------------------------ */
+
+/* A cover that lifts and turns toward the pointer, like a book pulled off a shelf. */
+.book-tilt {
+  transform-style: preserve-3d;
+  transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.45s;
+  will-change: transform;
+}
+@media (hover: hover) {
+  .group:hover .book-tilt {
+    transform: perspective(900px) rotateY(-14deg) rotateX(4deg) translateY(-6px) translateZ(0);
+  }
+}
+.book-spine-light {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 9%;
+  background: linear-gradient(90deg, rgb(0 0 0 / 0.38), rgb(255 255 255 / 0.12) 55%, transparent);
+  pointer-events: none;
+}
+.book-sheen {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(115deg, transparent 35%, rgb(255 255 255 / 0.16) 48%, transparent 60%);
+  transform: translateX(-60%);
+  transition: transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .group:hover .book-sheen { transform: translateX(60%); }
+}
+
+/* -------------------------------- motion --------------------------------- */
 
 @keyframes rise {
-  from { opacity: 0; transform: translateY(10px); }
+  from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: none; }
 }
-.rise { animation: rise .5s cubic-bezier(.22,1,.36,1) both; }
+.rise { animation: rise 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-@keyframes shimmer {
-  100% { transform: translateX(100%); }
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
+.fade-in { animation: fade 0.8s ease both; }
+
+@keyframes sheet-up {
+  from { transform: translateY(24px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes sheet-left {
+  from { transform: translateX(28px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+.sheet-up { animation: sheet-up 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sheet-left { animation: sheet-left 0.42s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+/* Each chapter opens like a page settling into place. */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(18px) rotateX(6deg); transform-origin: 50% 0; filter: blur(3px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.page-in { animation: page-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) both; }
+
+@keyframes shimmer { 100% { transform: translateX(100%); } }
 .shimmer { position: relative; overflow: hidden; }
 .shimmer::after {
   content: "";
-  position: absolute; inset: 0;
+  position: absolute;
+  inset: 0;
   transform: translateX(-100%);
   background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--fg) 8%, transparent), transparent);
   animation: shimmer 1.6s infinite;
@@ -174,7 +322,7 @@ svg.lucide {
 
 @keyframes pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .45; transform: scale(.82); }
+  50% { opacity: 0.45; transform: scale(0.82); }
 }
 .dot-live { animation: pulse-dot 1.4s ease-in-out infinite; }
 
@@ -185,7 +333,8 @@ svg.lucide {
 .caret::after {
   content: "";
   display: inline-block;
-  width: 0.5ch; height: 1.05em;
+  width: 0.5ch;
+  height: 1.05em;
   margin-left: 2px;
   translate: 0 0.18em;
   background: var(--accent);
@@ -193,16 +342,56 @@ svg.lucide {
   animation: caret 1s step-end infinite;
 }
 
+@keyframes float-y {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-6px); }
+}
+.float-y { animation: float-y 5s ease-in-out infinite; }
+
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+.spin-slow { animation: spin-slow 24s linear infinite; }
+
+/* A progress bar that glows while something is being made. */
+.bar-live {
+  background: linear-gradient(90deg, var(--accent), var(--magic), var(--magic-2), var(--accent));
+  background-size: 300% 100%;
+  animation: bar-flow 3s linear infinite;
+}
+@keyframes bar-flow { to { background-position: 300% 0; } }
+
+/* ------------------------------- reading --------------------------------- */
+
+/*
+ * Each paragraph lives in its own wrapper (for memoisation and
+ * content-visibility), so spacing goes between wrappers — a "p:last-child"
+ * rule would match every paragraph and silently remove all the gaps.
+ */
 .prose-novel p {
-  margin: 0 0 var(--para-gap, 1.15em);
+  margin: 0;
   text-indent: var(--indent, 0);
 }
-.prose-novel p:last-child { margin-bottom: 0; }
+.prose-novel > .para + .para,
+.prose-novel .para > .t + .t { margin-top: var(--para-gap, 1.15em); }
+.prose-novel .scene-break {
+  text-indent: 0;
+  text-align: center;
+  letter-spacing: 0.8em;
+  color: var(--reader-quiet);
+}
+
+/* Off-screen paragraphs skip layout and paint until they scroll near. */
+.cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 120px;
+}
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
-    animation-duration: .01ms !important;
+    animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

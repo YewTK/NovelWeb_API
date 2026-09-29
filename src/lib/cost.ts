@@ -39,3 +39,46 @@ export function formatUsd(usd: number): string {
   if (usd < 0.01) return "< $0.01";
   return `~$${usd.toFixed(2)}`;
 }
+
+/* ------------------------------ writing studio ----------------------------- */
+
+export interface WritingEstimate {
+  words: number;
+  requests: number;
+  outputTokens: number;
+  usd: number | null;
+  /** rough wall-clock minutes at typical streaming speed */
+  minutes: number;
+}
+
+/**
+ * What writing a whole novel is likely to cost. Thai prose runs about four
+ * characters a word and close to a token a character; every part of every
+ * chapter also re-sends the story bible, mostly served from the prompt cache.
+ */
+export function estimateWriting(
+  project: { chapterCount: number; wordsPerChapter: number; language: string },
+  config: ProviderConfig,
+  work: {
+    /** chapters to write */
+    write: number;
+    /** chapters to plan on the way */
+    plan: number;
+    /** the opening request that writes the bible and roadmap */
+    bible?: boolean;
+  },
+): WritingEstimate {
+  const thai = project.language === "th";
+  const perWord = thai ? 4.4 : 1.5;
+  const parts = Math.max(1, Math.ceil(project.wordsPerChapter / 1400));
+  const words = work.write * project.wordsPerChapter;
+  const arcs = Math.min(40, Math.max(3, Math.round(project.chapterCount / 80)));
+  const planTokens = work.plan * (thai ? 260 : 130) + (work.bible ? 3500 + arcs * (thai ? 200 : 100) : 0);
+  const outputTokens = Math.round(words * perWord + planTokens);
+  const requests = work.write * parts + Math.ceil(work.plan / 25);
+  // ~5k tokens of bible and context per request, most of it cache reads at a tenth of the price.
+  const inputTokens = requests * 5000;
+  const price = PRICES[config.model];
+  const usd = price ? (inputTokens * price.in * 0.4 + outputTokens * price.out) / 1_000_000 : null;
+  return { words, requests, outputTokens, usd, minutes: Math.max(1, Math.round(outputTokens / 70 / 60)) };
+}

@@ -1,6 +1,6 @@
 import type { BookInfo, GlossaryEntry, StyleSettings } from "./types";
 
-const LANG_NAME: Record<string, string> = {
+export const LANG_NAME: Record<string, string> = {
   th: "Thai (ภาษาไทย)",
   en: "English",
   ja: "Japanese",

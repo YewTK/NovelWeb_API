@@ -2,7 +2,7 @@
 
 import * as local from "./db";
 import { cloudConfigured, supabase } from "./supabase";
-import type { BookInfo, Chapter, Paragraph, GlossaryEntry, Series } from "./types";
+import type { BookInfo, Chapter, ChapterMeta, Paragraph, GlossaryEntry, Series } from "./types";
 import { nameKey, type SeriesRef } from "./series";
 import { mergeGlossary } from "./glossary";
 import {
@@ -146,15 +146,63 @@ async function adoptLegacy(owner: AuthUser): Promise<void> {
   if (chapters.length || series.length) await pushAllLocal();
 }
 
+/** Scope used when the project has no Supabase at all: one reader, this device. */
+export const LOCAL_SCOPE = "local";
+
+/* Server timestamps per row, cached in memory and written back lazily. */
+let syncMarks: Record<string, number> = {};
+let syncTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleSyncSave() {
+  if (syncTimer) clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => void local.saveSyncMarks(syncMarks), 800);
+}
+
+function markSynced(id: string, serverTime: string | null | undefined) {
+  const at = serverTime ? Date.parse(serverTime) : NaN;
+  if (!Number.isFinite(at)) return;
+  syncMarks[id] = at;
+  scheduleSyncSave();
+}
+
+function forgetSynced(id: string) {
+  if (!(id in syncMarks)) return;
+  delete syncMarks[id];
+  scheduleSyncSave();
+}
+
 /** Points the local cache at this reader and refreshes the cloud status. */
 async function applyUser(next: AuthUser | null): Promise<void> {
   const changed = next?.id !== userId;
   user = next;
   userId = next?.id ?? null;
   local.setScope(userId);
+  if (changed) syncMarks = userId ? await local.loadSyncMarks() : {};
   status = next ? "ready" : "signedOut";
   emit();
   if (next && changed) await adoptLegacy(next);
+}
+
+/**
+ * Without Supabase the app still works — everything simply stays on this
+ * device. The pre-account bookshelf, if there is one, moves into this scope.
+ */
+async function enterLocalMode(): Promise<void> {
+  local.setScope(LOCAL_SCOPE);
+  status = "disabled";
+  try {
+    if (!localStorage.getItem(ADOPT_FLAG)) {
+      const { chapters, series } = await local.readLegacy();
+      for (const novel of series) await local.saveSeries(novel);
+      for (const chapter of chapters) await local.saveChapter(chapter);
+      if (chapters.length || series.length) await local.clearLegacy();
+      adoptedCount = chapters.length;
+      localStorage.setItem(ADOPT_FLAG, "1");
+    }
+  } catch {
+    /* private mode: nothing to adopt, nothing to remember */
+  }
+  emit();
 }
 
 let initPromise: Promise<void> | null = null;
@@ -166,8 +214,7 @@ export function initCloud(): Promise<void> {
   initPromise = (async () => {
     const sb = supabase();
     if (!sb) {
-      status = "disabled";
-      emit();
+      await enterLocalMode();
       return;
     }
 
@@ -203,6 +250,8 @@ export async function signUpCloud(
 }
 
 export async function signOutCloud(): Promise<void> {
+  // Unsent novel edits still belong to this reader: send them while we can.
+  flushSeriesPush();
   for (const timer of pending.values()) clearTimeout(timer);
   pending.clear();
   await authSignOut();
@@ -211,53 +260,82 @@ export async function signOutCloud(): Promise<void> {
 
 /* --------------------------------- reads --------------------------------- */
 
-export async function listChapters(): Promise<Chapter[]> {
-  return local.listChapters();
+/** The whole library as lightweight metadata — never the chapter bodies. */
+export async function listChapters(): Promise<ChapterMeta[]> {
+  return local.listChapterMetas();
 }
 
 export async function getChapter(id: string): Promise<Chapter | undefined> {
   return local.loadChapter(id);
 }
 
-/** Pulls the cloud library down and merges it into the local cache (newest wins). */
-export async function pullChapters(): Promise<Chapter[]> {
+/**
+ * Brings this device up to date with the cloud in two steps: a cheap listing
+ * of ids and server timestamps, then full rows only for chapters that changed
+ * since this device last saw them. The whole library — every paragraph of
+ * every chapter — used to be downloaded again on every launch.
+ */
+export async function pullChapters(): Promise<void> {
   const sb = supabase();
-  if (!sb || !userId) return local.listChapters();
+  if (!sb || !userId) return;
 
-  // Paged, so a long novel is never cut off at an arbitrary row count.
-  const PAGE = 100;
-  const rows: Row[] = [];
+  const PAGE = 1000;
+  const listing: { id: string; updated_at: string }[] = [];
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await sb
       .from("chapters")
-      .select("*")
+      .select("id, updated_at")
       .order("updated_at", { ascending: false })
       .range(from, from + PAGE - 1);
 
     if (error) {
       status = "offline";
       emit();
-      return local.listChapters();
+      return;
     }
-    rows.push(...(data as Row[]));
+    listing.push(...(data as { id: string; updated_at: string }[]));
     if (data.length < PAGE) break;
   }
 
-  const remote = rows.map(rowToChapter);
-  const localList = await local.listChapters();
-  const byId = new Map(localList.map((c) => [c.id, c]));
+  const metas = await local.listChapterMetas();
+  const mine = new Map(metas.map((m) => [m.id, m]));
 
-  for (const r of remote) {
-    const existing = byId.get(r.id);
-    if (!existing || r.updatedAt > existing.updatedAt) {
-      byId.set(r.id, r);
-      await local.saveChapter(r);
+  const stale = listing
+    .filter((r) => {
+      if (!mine.has(r.id)) return true;
+      const known = syncMarks[r.id];
+      return known === undefined || Date.parse(r.updated_at) > known;
+    })
+    .map((r) => r.id);
+
+  const BATCH = 40;
+  for (let i = 0; i < stale.length; i += BATCH) {
+    const { data, error } = await sb
+      .from("chapters")
+      .select("*")
+      .in("id", stale.slice(i, i + BATCH));
+    if (error) {
+      status = "offline";
+      emit();
+      return;
+    }
+    for (const row of data as Row[]) {
+      const remote = rowToChapter(row);
+      const here = mine.get(remote.id);
+      // An edit on this device that has not reached the cloud yet wins.
+      const unsent = pending.has(remote.id);
+      const known = row.id in syncMarks;
+      // Never synced before: fall back to comparing the two clocks.
+      const take = !here || (!unsent && (known || remote.updatedAt >= here.updatedAt));
+      if (take) await local.saveChapter(remote);
+      markSynced(remote.id, row.updated_at);
     }
   }
 
-  status = "ready";
-  emit();
-  return [...byId.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  if (status !== "ready") {
+    status = "ready";
+    emit();
+  }
 }
 
 /* --------------------------------- writes -------------------------------- */
@@ -267,13 +345,18 @@ const pending = new Map<string, ReturnType<typeof setTimeout>>();
 async function pushChapter(chapter: Chapter): Promise<void> {
   const sb = supabase();
   if (!sb || !userId) return;
-  const { error } = await sb
+  const { data, error } = await sb
     .from("chapters")
-    .upsert(chapterToRow(chapter, userId), { onConflict: "id" });
+    .upsert(chapterToRow(chapter, userId), { onConflict: "id" })
+    .select("id, updated_at");
   if (error) {
     status = "offline";
     emit();
-  } else if (status !== "ready") {
+    return;
+  }
+  const row = (data as { id: string; updated_at: string }[] | null)?.[0];
+  if (row) markSynced(row.id, row.updated_at);
+  if (status !== "ready") {
     status = "ready";
     emit();
   }
@@ -311,6 +394,7 @@ export async function deleteChapter(id: string): Promise<void> {
     pending.delete(id);
   }
   await local.deleteChapter(id);
+  forgetSynced(id);
   const sb = supabase();
   if (sb && userId) await sb.from("chapters").delete().eq("id", id);
 }
@@ -327,10 +411,23 @@ export async function pushAllLocal(): Promise<number> {
 
   const all = await local.listChapters();
   if (!all.length) return 0;
-  const { error } = await sb
-    .from("chapters")
-    .upsert(all.map((c) => chapterToRow(c, owner)), { onConflict: "id" });
-  return error ? 0 : all.length;
+  // In batches: a whole library in one request can exceed the gateway's body
+  // limit and fail as a single all-or-nothing error.
+  let sent = 0;
+  const BATCH = 25;
+  for (let i = 0; i < all.length; i += BATCH) {
+    const slice = all.slice(i, i + BATCH);
+    const { data, error } = await sb
+      .from("chapters")
+      .upsert(slice.map((c) => chapterToRow(c, owner)), { onConflict: "id" })
+      .select("id, updated_at");
+    if (error) break;
+    for (const row of (data ?? []) as { id: string; updated_at: string }[]) {
+      markSynced(row.id, row.updated_at);
+    }
+    sent += slice.length;
+  }
+  return sent;
 }
 
 /* -------------------------------- series --------------------------------- */
@@ -418,9 +515,32 @@ export async function pullSeries(): Promise<Series[]> {
   return [...byId.values()];
 }
 
-async function pushSeries(series: Series): Promise<void> {
+/**
+ * A studio novel carries its whole plan, and the writer saves it after every
+ * chapter; bursts of saves to one novel are coalesced into a single upload.
+ */
+const seriesPending = new Map<string, { timer: ReturnType<typeof setTimeout>; series: Series }>();
+
+function pushSeries(series: Series): void {
   if (!userId) return;
-  await upsertSeries([series], userId);
+  const existing = seriesPending.get(series.id);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    seriesPending.delete(series.id);
+    if (userId) void upsertSeries([series], userId);
+  }, 1500);
+  seriesPending.set(series.id, { timer, series });
+}
+
+/** Sends any coalesced novel saves now — for when the page is going away. */
+export function flushSeriesPush(): void {
+  if (!userId) return;
+  const list = [...seriesPending.values()].map((p) => {
+    clearTimeout(p.timer);
+    return p.series;
+  });
+  seriesPending.clear();
+  if (list.length) void upsertSeries(list, userId);
 }
 
 /**
@@ -464,6 +584,11 @@ export async function listSeries(): Promise<Series[]> {
 }
 
 export async function deleteSeries(id: string): Promise<void> {
+  const queued = seriesPending.get(id);
+  if (queued) {
+    clearTimeout(queued.timer);
+    seriesPending.delete(id);
+  }
   await local.deleteSeries(id);
   const sb = supabase();
   if (sb && userId) await sb.from("series").delete().eq("id", id);

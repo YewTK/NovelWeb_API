@@ -5,6 +5,8 @@ import { ArrowRight, Eye, EyeOff, Loader2, Lock, Sparkles, UserRound } from "luc
 import { MIN_PASSWORD, validateCredentials } from "@/lib/auth";
 import { signInCloud, signUpCloud } from "@/lib/repo";
 import { cn } from "@/lib/utils";
+import { BrandMark } from "./AppShell";
+import { GrimoireScene } from "./three/Scenes";
 import { Button } from "./ui";
 
 type Mode = "signin" | "signup";
@@ -49,20 +51,23 @@ export function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
   };
 
   return (
-    <main className="relative z-10 grid min-h-dvh place-items-center px-5 py-12">
-      <div className="w-full max-w-[400px]">
-        <div className="rise mb-8 text-center">
-          <span className="mx-auto mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-[var(--accent)] text-[20px] font-semibold text-[var(--btn-fg)]">
-            N
+    <main className="relative z-10 grid min-h-dvh place-items-center overflow-hidden px-5 py-12">
+      <GrimoireScene className="pointer-events-none absolute inset-x-0 top-0 h-[60vh] opacity-80 sm:h-[70vh]" />
+      <div className="relative w-full max-w-[400px] pt-[18vh] sm:pt-[24vh]">
+        <div className="rise mb-7 text-center">
+          <span className="mx-auto mb-4 flex justify-center">
+            <BrandMark size={48} />
           </span>
-          <h1 className="text-[26px] font-semibold tracking-tight">NovelFlow</h1>
+          <h1 className="font-display text-[28px] font-semibold tracking-[0.06em]">
+            Novel<span className="text-gilded">Flow</span>
+          </h1>
           <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--fg-muted)]">
-            เข้าสู่ระบบเพื่อเปิดชั้นหนังสือและคลังคำศัพท์ของคุณ
+            เข้าสู่ห้องสมุดของคุณ — ชั้นหนังสือ คลังคำศัพท์ และสตูดิโอเขียนนิยาย
           </p>
         </div>
 
         <div
-          className="rise rounded-[24px] border border-[var(--line)] bg-[var(--bg-elev)]/80 p-5 shadow-[0_24px_60px_-24px_rgba(0,0,0,.55)] backdrop-blur-xl"
+          className="rise gilded glass rounded-[26px] p-5 shadow-[0_30px_70px_-30px_rgba(0,0,0,.7)]"
           style={{ animationDelay: "60ms" }}
         >
           <div className="mb-5 flex gap-1 rounded-xl border border-[var(--line)] bg-[var(--bg)] p-1">
@@ -145,14 +150,14 @@ export function AuthGate({ onSignedIn }: { onSignedIn: () => void }) {
             {error ? (
               <p
                 role="alert"
-                className="rounded-xl border border-red-500/30 bg-red-500/10 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-red-300"
+                className="rounded-xl border border-[color-mix(in_oklab,var(--danger)_35%,transparent)] bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-3.5 py-2.5 text-[12.5px] leading-relaxed text-[var(--danger)]"
               >
                 {error}
               </p>
             ) : null}
 
             <Button
-              variant="primary"
+              variant="accent-solid"
               size="lg"
               className="w-full"
               onClick={submit}
