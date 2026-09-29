@@ -112,12 +112,36 @@ export interface OutlineChapter {
   summary: string;
 }
 
+/** A story arc (volume) in the long-range roadmap of the novel. */
+export interface OutlineArc {
+  name: string;
+  /** first and last chapter the arc spans */
+  from: number;
+  to: number;
+  summary: string;
+}
+
+/** "The story so far", written by the planner as each batch lands. */
+export interface OutlineRecap {
+  /** the recap covers every planned chapter up to and including this one */
+  through: number;
+  text: string;
+}
+
 export interface StoryOutline {
   logline: string;
   /** world, power system, tone — the story bible */
   world: string;
   characters: OutlineCharacter[];
+  /**
+   * Chapter plans. Long novels are planned in batches as writing approaches
+   * them, so this usually covers only the opening stretch of the book.
+   */
   chapters: OutlineChapter[];
+  /** the whole-book roadmap, planned once up front */
+  arcs?: OutlineArc[];
+  /** rolling summaries, so chapter 3,000 still knows what happened in 30 */
+  recaps?: OutlineRecap[];
 }
 
 /** Everything the Studio needs to plan and keep writing one novel. */
@@ -135,6 +159,8 @@ export interface WritingProject {
   pov: Pov;
   /** language code the novel is written in */
   language: string;
+  /** reasoning effort for writing: "high" is the best prose, "medium" is cheaper */
+  effort?: "medium" | "high";
   outline: StoryOutline | null;
   /** chapter number → id of the chapter written for it */
   chapterIds: Record<string, string>;

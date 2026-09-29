@@ -29,6 +29,7 @@ import {
   listChapters,
   consumeAdoptionNotice,
   deleteShelf,
+  flushSeriesPush,
   listSeries,
   mergeIntoSeries,
   pullChapters,
@@ -52,7 +53,7 @@ import { runGlossaryPass, runTranslation, type KeyRing } from "@/lib/translator"
 import type { Chapter, ChapterMeta, ExtractResult, GlossaryEntry, Series, WritingProject } from "@/lib/types";
 import { useCloudState } from "@/lib/useCloud";
 import { normalizeUrl, urlKey } from "@/lib/utils";
-import { UNTITLED, useWriterJob } from "@/lib/writer";
+import { UNTITLED, nextToWrite, useWriterJob } from "@/lib/writer";
 import {
   UNSORTED_SLUG,
   bookPath,
@@ -675,6 +676,7 @@ export default function Page() {
       flush();
       const current = jobRef.current;
       if (current) void saveChapter(current, true);
+      flushSeriesPush();
     };
     const onVisibility = () => {
       if (document.visibilityState === "hidden") settle();
@@ -1311,9 +1313,9 @@ export default function Page() {
   );
 
   const planProject = useCallback(
-    (id: string) => {
+    (id: string, upTo?: number) => {
       if (needKey()) return;
-      void writer.plan(id);
+      void writer.plan(id, upTo);
     },
     [needKey, writer],
   );
@@ -1399,17 +1401,16 @@ export default function Page() {
     return { prev: list[at - 1] ?? null, next: list[at + 1] ?? null };
   }, [chapter, shelves]);
 
-  /** For a studio novel: the first planned chapter that is not finished yet. */
+  /**
+   * For a studio novel: the first chapter that is not finished yet. It may
+   * not be planned yet either — the writer plans it just in time.
+   */
   const nextPlanned = useCallback(
     (series: Series | null): number | null => {
       const project = series?.info?.project;
       if (!project?.outline) return null;
       const metas = chaptersBySeries.get(series!.id) ?? [];
-      const done = new Set(metas.filter((m) => m.status === "done").map((m) => m.id));
-      const hit = project.outline.chapters.find(
-        (c) => c.n <= project.chapterCount && !done.has(project.chapterIds[String(c.n)] ?? ""),
-      );
-      return hit ? hit.n : null;
+      return nextToWrite(project, new Set(metas.filter((m) => m.status === "done").map((m) => m.id)));
     },
     [chaptersBySeries],
   );

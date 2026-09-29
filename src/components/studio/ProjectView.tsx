@@ -1,13 +1,16 @@
 "use client";
 
-import { memo, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Feather,
   Globe2,
   Loader2,
+  Map as MapIcon,
   PenLine,
   Play,
   Plus,
@@ -19,15 +22,39 @@ import {
   Wand2,
 } from "lucide-react";
 import { authorStyle } from "@/lib/authors";
-import { estimateWriting, formatUsd } from "@/lib/cost";
+import { estimateWriting, formatUsd, type WritingEstimate } from "@/lib/cost";
 import { useSettings } from "@/lib/store";
-import type { Chapter, ChapterMeta, OutlineChapter, OutlineCharacter, Series, StoryOutline, WritingProject } from "@/lib/types";
+import type {
+  Chapter,
+  ChapterMeta,
+  OutlineArc,
+  OutlineChapter,
+  OutlineCharacter,
+  Series,
+  StoryOutline,
+  WritingProject,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
-import type { WriterState } from "@/lib/writer";
+import { MAX_CHAPTERS, OUTLINE_BATCH, plannedThrough, type WriterState } from "@/lib/writer";
 import { Cover } from "../Bookshelf";
 import { Button, Chip, ConfirmDialog, inputClass } from "../ui";
 
 type RowStatus = "none" | "writing" | "draft" | "error" | "done";
+
+/** Chapter plans shown per page — a 4,000-chapter plan never renders at once. */
+const PAGE = 50;
+
+const clampTo = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, Math.round(Number.isFinite(n) ? n : lo)));
+
+function minutes(m: number): string {
+  if (m < 60) return `${m} นาที`;
+  if (m < 60 * 48) return `${(m / 60).toFixed(1)} ชม.`;
+  return `${Math.round(m / 60 / 24)} วัน`;
+}
+
+function costLine(est: WritingEstimate): string {
+  return `ประมาณ ${minutes(est.minutes)}${est.usd !== null ? ` · ${formatUsd(est.usd)}` : ""}`;
+}
 
 export function ProjectView({
   series,
@@ -49,7 +76,8 @@ export function ProjectView({
   /** the chapter being written right now, with its text */
   live: Chapter | null;
   onPatch: (patch: Partial<WritingProject>, name?: string) => void;
-  onPlan: () => void;
+  /** plan chapters up to and including `upTo` */
+  onPlan: (upTo: number) => void;
   onWrite: (numbers: number[]) => void;
   onStop: () => void;
   onOpenChapter: (id: string) => void;
@@ -58,16 +86,16 @@ export function ProjectView({
 }) {
   const project = series.info!.project!;
   const outline = project.outline;
+  const total = project.chapterCount;
   const style = authorStyle(project.styleId);
   const config = useSettings((s) => s.config);
   const mine = writer.seriesId === series.id;
   const planning = mine && writer.phase === "outline";
   const writing = mine && writer.phase === "writing";
-  const busyElsewhere = writer.phase !== "idle" && !mine;
+  const busy = writer.phase !== "idle";
   const [tab, setTab] = useState<"chapters" | "bible">("chapters");
   const [rewrite, setRewrite] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [batch, setBatch] = useState(5);
 
   const byId = useMemo(() => new Map(chapters.map((c) => [c.id, c])), [chapters]);
 
@@ -81,14 +109,47 @@ export function ProjectView({
     return { status: "draft", meta };
   };
 
-  const planned = outline?.chapters.filter((c) => c.n <= project.chapterCount) ?? [];
-  const pending = planned.filter((c) => statusOf(c.n).status !== "done").map((c) => c.n);
-  const written = planned.length - pending.length;
-  const needsMorePlan = Boolean(outline) && planned.length < project.chapterCount;
-  const words = chapters.reduce((s, c) => s + (c.status === "done" ? c.paragraphCount : 0), 0);
+  const doneSet = useMemo(() => {
+    const out = new Set<number>();
+    for (const [n, id] of Object.entries(project.chapterIds)) if (byId.get(id)?.status === "done") out.add(Number(n));
+    return out;
+  }, [project.chapterIds, byId]);
 
-  const nextBatch = pending.slice(0, batch);
-  const estimate = estimateWriting(project, config, nextBatch.length || 1, false);
+  const written = doneSet.size;
+  const planned = plannedThrough(project);
+  const firstGap = (() => {
+    for (let n = 1; n <= total; n++) if (!doneSet.has(n)) return n;
+    return null;
+  })();
+
+  /* --- write up to --- */
+  const [writeTo, setWriteTo] = useState(() => Math.min(total, (firstGap ?? total) + 4));
+  useEffect(() => {
+    // Keep the target ahead of the frontier as chapters get written.
+    if (firstGap !== null && writeTo < firstGap) setWriteTo(Math.min(total, firstGap + 4));
+  }, [firstGap, writeTo, total]);
+  const toWrite = useMemo(() => {
+    const out: number[] = [];
+    for (let n = firstGap ?? total + 1; n <= Math.min(writeTo, total); n++) if (!doneSet.has(n)) out.push(n);
+    return out;
+  }, [firstGap, writeTo, total, doneSet]);
+  const toPlanForWrite = toWrite.filter((n) => n > planned).length;
+  const writeEst = estimateWriting(project, config, { write: toWrite.length, plan: toPlanForWrite });
+
+  /* --- plan up to --- */
+  const [planTo, setPlanTo] = useState(() => Math.min(total, planned + OUTLINE_BATCH));
+  useEffect(() => {
+    if (planTo <= planned) setPlanTo(Math.min(total, planned + OUTLINE_BATCH));
+  }, [planned, planTo, total]);
+  const planEst = estimateWriting(project, config, { write: 0, plan: Math.max(0, planTo - planned) });
+
+  /* --- chapter list paging --- */
+  const pages = Math.max(1, Math.ceil(planned / PAGE));
+  const [page, setPage] = useState(() => Math.min(pages - 1, Math.floor(((firstGap ?? 1) - 1) / PAGE)));
+  const [jump, setJump] = useState("");
+  const visible = (outline?.chapters ?? []).filter((c) => c.n > page * PAGE && c.n <= (page + 1) * PAGE);
+
+  const pct = (n: number) => `${total ? Math.min(100, (n / total) * 100) : 0}%`;
 
   return (
     <div className="space-y-6">
@@ -105,6 +166,7 @@ export function ProjectView({
                 <Feather size={11} /> สำนวน {style.label}
               </Chip>
               <Chip>{project.language === "th" ? "ภาษาไทย" : "English"}</Chip>
+              <Chip>{(project.effort ?? "high") === "high" ? "คุณภาพสูงสุด" : "โหมดประหยัด"}</Chip>
               {project.tags.slice(0, 4).map((t) => (
                 <Chip key={t}>#{t}</Chip>
               ))}
@@ -119,19 +181,26 @@ export function ProjectView({
               <p className="mt-1.5 line-clamp-2 font-serif text-[14px] italic text-[var(--fg-muted)]">“{project.blurb}”</p>
             ) : null}
 
-            <div className="mt-4 flex items-center gap-3">
-              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--line)]">
-                <div
-                  className={cn("h-full rounded-full transition-[width] duration-700", writing ? "bar-live" : "bg-[var(--accent)]")}
-                  style={{ width: `${project.chapterCount ? (written / project.chapterCount) * 100 : 0}%` }}
-                />
-              </div>
-              <span className="shrink-0 text-[12.5px] tabular-nums text-[var(--fg-muted)]">
-                เขียนแล้ว {written}/{project.chapterCount} ตอน
-              </span>
+            {/* two layers: how far it is planned, and how far it is written */}
+            <div className="relative mt-4 h-2 overflow-hidden rounded-full bg-[var(--line)]" aria-hidden>
+              <div className="absolute inset-y-0 left-0 rounded-full bg-[color-mix(in_oklab,var(--magic)_45%,transparent)] transition-[width] duration-700" style={{ width: pct(planned) }} />
+              <div
+                className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-700", writing ? "bar-live" : "bg-[var(--accent)]")}
+                style={{ width: pct(written) }}
+              />
             </div>
-            <p className="mt-1.5 text-[11.5px] text-[var(--fg-dim)]">
-              ~{project.wordsPerChapter.toLocaleString()} คำต่อตอน · {words.toLocaleString()} ย่อหน้าที่เขียนแล้ว
+            <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] tabular-nums text-[var(--fg-muted)]">
+              <span>
+                <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-[var(--accent)]" />
+                เขียนแล้ว {written.toLocaleString()} ตอน
+              </span>
+              <span>
+                <span className="mr-1.5 inline-block h-2 w-2 rounded-full bg-[color-mix(in_oklab,var(--magic)_60%,transparent)]" />
+                วางแผนแล้ว {planned.toLocaleString()} ตอน
+              </span>
+              <span className="text-[var(--fg-dim)]">
+                ทั้งเรื่อง {total.toLocaleString()} ตอน · ~{project.wordsPerChapter.toLocaleString()} คำต่อตอน
+              </span>
             </p>
           </div>
         </div>
@@ -146,79 +215,121 @@ export function ProjectView({
         <section className="gilded rounded-3xl bg-[var(--bg-elev)]/70 p-6 text-center">
           <Wand2 className="mx-auto text-[var(--magic)]" size={28} />
           <h3 className="mt-3 font-serif text-[19px] font-semibold">ยังไม่มีโครงเรื่อง</h3>
-          <p className="mx-auto mt-1.5 max-w-[420px] text-[13.5px] leading-relaxed text-[var(--fg-muted)]">
-            AI จะสร้างคัมภีร์ของเรื่อง (โลก ระบบพลัง ตัวละคร) และแผนทุกตอนจากเรื่องย่อของคุณ
+          <p className="mx-auto mt-1.5 max-w-[440px] text-[13.5px] leading-relaxed text-[var(--fg-muted)]">
+            AI จะสร้างคัมภีร์ของเรื่อง (โลก ระบบพลัง ตัวละคร) แผนภาคของทั้งเรื่อง และแผนรายตอน {Math.min(OUTLINE_BATCH, total)} ตอนแรก
           </p>
-          <Button variant="magic" size="lg" className="mt-5" onClick={onPlan} disabled={planning || busyElsewhere}>
+          <Button variant="magic" size="lg" className="mt-5" onClick={() => onPlan(Math.min(total, OUTLINE_BATCH))} disabled={busy}>
             {planning ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
             {planning ? "กำลังวางโครงเรื่อง…" : "วางโครงเรื่อง"}
           </Button>
         </section>
       ) : (
         <>
-          {/* actions */}
-          <section className="flex flex-col gap-3 rounded-3xl border border-[var(--line)] bg-[var(--bg-elev)]/60 p-4 sm:flex-row sm:items-center sm:p-5">
-            <div className="min-w-0 flex-1">
-              <p className="text-[14px] font-semibold">
-                {pending.length ? `เหลืออีก ${pending.length} ตอนที่ยังไม่ได้เขียน` : "เขียนครบทุกตอนที่วางไว้แล้ว"}
-              </p>
-              <p className="mt-0.5 text-[12px] text-[var(--fg-dim)]">
-                {pending.length
-                  ? `รอบนี้ ${nextBatch.length} ตอน · ประมาณ ${estimate.minutes} นาที${estimate.usd !== null ? ` · ${formatUsd(estimate.usd)}` : ""}`
-                  : needsMorePlan
-                    ? "วางโครงตอนที่เหลือเพื่อเขียนต่อ"
-                    : "เพิ่มจำนวนตอนในแท็บคัมภีร์ถ้าอยากเขียนภาคต่อ"}
-              </p>
-            </div>
-            {pending.length ? (
-              <div className="flex items-center gap-2">
-                <label className="relative">
-                  <span className="sr-only">จำนวนตอนต่อรอบ</span>
-                  <select
-                    value={batch}
-                    onChange={(e) => setBatch(Number(e.target.value))}
-                    className="h-11 appearance-none rounded-xl border border-[var(--line)] bg-[var(--bg)] pl-3 pr-8 text-[13.5px] outline-none"
-                  >
-                    {[1, 3, 5, 10, 20].filter((n) => n < pending.length).map((n) => (
-                      <option key={n} value={n}>
-                        {n} ตอน
-                      </option>
+          {/* controls */}
+          <section className="grid gap-4 lg:grid-cols-[1.35fr_1fr]">
+            <div className="gilded rounded-3xl bg-[var(--bg-elev)]/85 p-5">
+              <h3 className="flex items-center gap-2 font-serif text-[16px] font-semibold">
+                <PenLine size={16} className="text-[var(--accent)]" /> เขียนนิยาย
+              </h3>
+              {firstGap === null ? (
+                <p className="mt-2 text-[13.5px] text-[var(--fg-muted)]">
+                  เขียนครบทั้ง {total.toLocaleString()} ตอนแล้ว — เพิ่มจำนวนตอนในแท็บคัมภีร์ถ้าอยากเขียนภาคต่อ
+                </p>
+              ) : (
+                <>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[13.5px]">
+                    <span className="text-[var(--fg-muted)]">เขียนต่อจากตอนที่</span>
+                    <span className="rounded-lg bg-[var(--bg-elev-2)] px-2.5 py-1 font-semibold tabular-nums">{firstGap.toLocaleString()}</span>
+                    <span className="text-[var(--fg-muted)]">ถึงตอนที่</span>
+                    <input
+                      type="number"
+                      min={firstGap}
+                      max={total}
+                      value={writeTo}
+                      onChange={(e) => setWriteTo(clampTo(Number(e.target.value), firstGap, total))}
+                      aria-label="เขียนถึงตอนที่"
+                      className={cn(inputClass, "h-9 w-24 py-1 text-right font-semibold tabular-nums")}
+                    />
+                  </div>
+                  <div className="mt-2.5 flex flex-wrap gap-1.5">
+                    {[1, 5, 10, 25, 50, 100].map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setWriteTo(Math.min(total, firstGap + k - 1))}
+                        aria-pressed={writeTo === Math.min(total, firstGap + k - 1)}
+                        className={cn(
+                          "h-8 rounded-full border px-3 text-[12.5px] tabular-nums transition-colors",
+                          writeTo === Math.min(total, firstGap + k - 1)
+                            ? "border-[var(--accent-line)] bg-[var(--accent-soft)] font-medium text-[var(--accent)]"
+                            : "border-[var(--line)] text-[var(--fg-muted)] hover:text-[var(--fg)]",
+                        )}
+                      >
+                        {k} ตอน
+                      </button>
                     ))}
-                    <option value={pending.length}>ทั้งหมด ({pending.length})</option>
-                  </select>
-                  <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--fg-dim)]" />
-                </label>
-                {needsMorePlan && !writing ? (
-                  <Button variant="outline" size="lg" onClick={onPlan} disabled={planning || busyElsewhere} aria-label="วางโครงตอนที่เหลือ">
-                    <Sparkles size={16} /> <span className="hidden sm:inline">วางโครงเพิ่ม</span>
+                  </div>
+                  <p className="mt-3 text-[12px] leading-relaxed text-[var(--fg-dim)]">
+                    รอบนี้ {toWrite.length.toLocaleString()} ตอน
+                    {toPlanForWrite ? ` (วางแผนเพิ่มอัตโนมัติ ${toPlanForWrite.toLocaleString()} ตอนระหว่างทาง)` : ""} · {costLine(writeEst)}
+                  </p>
+                  <div className="mt-4 flex gap-2">
+                    {writing ? (
+                      <Button variant="danger" size="lg" className="flex-1" onClick={onStop}>
+                        <Square size={14} fill="currentColor" /> หยุดเขียน
+                      </Button>
+                    ) : (
+                      <Button variant="magic" size="lg" className="flex-1" onClick={() => onWrite(toWrite)} disabled={busy || !toWrite.length}>
+                        <PenLine size={16} /> เขียน {toWrite.length.toLocaleString()} ตอน
+                      </Button>
+                    )}
+                    <Button variant="outline" size="lg" onClick={onOpenBook} aria-label="ไปอ่าน">
+                      <BookOpen size={16} />
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="rounded-3xl border border-[var(--line)] bg-[var(--bg-elev)]/60 p-5">
+              <h3 className="flex items-center gap-2 font-serif text-[16px] font-semibold">
+                <Sparkles size={16} className="text-[var(--magic)]" /> วางแผนล่วงหน้า
+              </h3>
+              <p className="mt-1.5 text-[12.5px] leading-relaxed text-[var(--fg-muted)]">
+                วางแผนแล้วถึงตอนที่ {planned.toLocaleString()} — ตรวจแก้แผนก่อนเขียนได้ หรือปล่อยให้ระบบวางให้ทีละ {OUTLINE_BATCH} ตอนเมื่อเขียนถึง
+              </p>
+              {planned < total ? (
+                <>
+                  <div className="mt-3 flex flex-wrap items-center gap-2 text-[13.5px]">
+                    <span className="text-[var(--fg-muted)]">วางแผนถึงตอนที่</span>
+                    <input
+                      type="number"
+                      min={planned + 1}
+                      max={total}
+                      value={planTo}
+                      onChange={(e) => setPlanTo(clampTo(Number(e.target.value), planned + 1, total))}
+                      aria-label="วางแผนถึงตอนที่"
+                      className={cn(inputClass, "h-9 w-24 py-1 text-right font-semibold tabular-nums")}
+                    />
+                  </div>
+                  <p className="mt-2 text-[12px] text-[var(--fg-dim)]">
+                    {(planTo - planned).toLocaleString()} ตอน · {costLine(planEst)}
+                  </p>
+                  <Button variant="outline" size="lg" className="mt-4 w-full" onClick={() => onPlan(planTo)} disabled={busy}>
+                    {planning ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />} วางแผนเพิ่ม
                   </Button>
-                ) : null}
-                {writing ? (
-                  <Button variant="danger" size="lg" onClick={onStop}>
-                    <Square size={14} fill="currentColor" /> หยุด
-                  </Button>
-                ) : (
-                  <Button variant="magic" size="lg" onClick={() => onWrite(nextBatch)} disabled={busyElsewhere || planning}>
-                    <PenLine size={16} /> เขียนต่อ
-                  </Button>
-                )}
-              </div>
-            ) : needsMorePlan ? (
-              <Button variant="magic" size="lg" onClick={onPlan} disabled={planning || busyElsewhere}>
-                <Sparkles size={16} /> วางโครงตอนที่เหลือ
-              </Button>
-            ) : (
-              <Button variant="outline" size="lg" onClick={onOpenBook}>
-                <BookOpen size={16} /> ไปอ่าน
-              </Button>
-            )}
+                </>
+              ) : (
+                <p className="mt-3 text-[13px] text-[var(--success)]">วางแผนครบทุกตอนแล้ว</p>
+              )}
+            </div>
           </section>
 
           {/* tabs */}
           <div className="flex gap-1 border-b border-[var(--line)]" role="tablist">
             {(
               [
-                ["chapters", `แผนรายตอน (${planned.length})`],
+                ["chapters", `แผนรายตอน (${planned.toLocaleString()})`],
                 ["bible", "คัมภีร์ของเรื่อง"],
               ] as const
             ).map(([key, label]) => (
@@ -239,30 +350,71 @@ export function ProjectView({
           </div>
 
           {tab === "chapters" ? (
-            <ol className="space-y-2">
-              {planned.map((c) => {
-                const { status, meta } = statusOf(c.n);
-                return (
-                  <OutlineRow
-                    key={c.n}
-                    chapter={c}
-                    status={status}
-                    disabled={planning}
-                    canWrite={!writing && !busyElsewhere && !planning}
-                    onChange={(next) =>
-                      onPatch({
-                        outline: {
-                          ...outline,
-                          chapters: outline.chapters.map((x) => (x.n === c.n ? { ...x, ...next } : x)),
-                        },
-                      })
-                    }
-                    onWrite={() => (status === "done" ? setRewrite(c.n) : onWrite([c.n]))}
-                    onRead={meta ? () => onOpenChapter(meta.id) : undefined}
-                  />
-                );
-              })}
-            </ol>
+            <div className="space-y-3">
+              {pages > 1 ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="outline" size="icon" onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={page === 0} aria-label="หน้าก่อนหน้า">
+                    <ChevronLeft size={16} />
+                  </Button>
+                  <span className="text-[13px] tabular-nums text-[var(--fg-muted)]">
+                    ตอนที่ {(page * PAGE + 1).toLocaleString()}–{Math.min(planned, (page + 1) * PAGE).toLocaleString()}
+                  </span>
+                  <Button variant="outline" size="icon" onClick={() => setPage((p) => Math.min(pages - 1, p + 1))} disabled={page >= pages - 1} aria-label="หน้าถัดไป">
+                    <ChevronRight size={16} />
+                  </Button>
+                  <form
+                    className="ml-auto flex items-center gap-2"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const n = clampTo(Number(jump), 1, planned);
+                      setPage(Math.floor((n - 1) / PAGE));
+                      setJump("");
+                    }}
+                  >
+                    <input
+                      value={jump}
+                      onChange={(e) => setJump(e.target.value.replace(/\D/g, ""))}
+                      inputMode="numeric"
+                      placeholder="ไปตอนที่…"
+                      aria-label="ไปตอนที่"
+                      className={cn(inputClass, "h-9 w-28 py-1")}
+                    />
+                  </form>
+                </div>
+              ) : null}
+
+              <ol className="space-y-2">
+                {visible.map((c) => {
+                  const { status, meta } = statusOf(c.n);
+                  return (
+                    <OutlineRow
+                      key={c.n}
+                      chapter={c}
+                      status={status}
+                      disabled={planning}
+                      canWrite={!busy}
+                      onChange={(next) =>
+                        onPatch({
+                          outline: {
+                            ...outline,
+                            chapters: outline.chapters.map((x) => (x.n === c.n ? { ...x, ...next } : x)),
+                          },
+                        })
+                      }
+                      onWrite={() => (status === "done" ? setRewrite(c.n) : onWrite([c.n]))}
+                      onRead={meta ? () => onOpenChapter(meta.id) : undefined}
+                    />
+                  );
+                })}
+              </ol>
+
+              {planned < total && page >= pages - 1 ? (
+                <p className="rounded-2xl border border-dashed border-[var(--line)] px-4 py-4 text-center text-[12.5px] leading-relaxed text-[var(--fg-dim)]">
+                  ตอนที่ {(planned + 1).toLocaleString()}–{total.toLocaleString()} ยังไม่ได้วางแผน — ระบบจะวางให้อัตโนมัติเมื่อเขียนถึง
+                  หรือกด “วางแผนเพิ่ม” เพื่อตรวจแก้ล่วงหน้า
+                </p>
+              ) : null}
+            </div>
           ) : (
             <BibleEditor
               outline={outline}
@@ -302,7 +454,7 @@ export function ProjectView({
           setConfirmDelete(false);
           onDelete();
         }}
-        body={`จะลบ “${series.name}” ทั้งโครงเรื่องและ ${chapters.length} ตอนที่เขียนไว้ — กู้คืนไม่ได้`}
+        body={`จะลบ “${series.name}” ทั้งโครงเรื่องและ ${chapters.length.toLocaleString()} ตอนที่เขียนไว้ — กู้คืนไม่ได้`}
       />
     </div>
   );
@@ -484,6 +636,7 @@ function BibleEditor({
   onChange: (next: StoryOutline) => void;
   onProject: (next: Partial<WritingProject>) => void;
 }) {
+  const latestRecap = [...(outline.recaps ?? [])].sort((a, b) => b.through - a.through)[0];
   const setCast = (i: number, next: Partial<OutlineCharacter>) =>
     onChange({ ...outline, characters: outline.characters.map((c, k) => (k === i ? { ...c, ...next } : c)) });
 
@@ -573,20 +726,53 @@ function BibleEditor({
         </div>
       </section>
 
+      <ArcsEditor outline={outline} disabled={disabled} onChange={onChange} />
+
+      {latestRecap ? (
+        <section className="gilded rounded-3xl bg-[var(--bg-elev)]/70 p-5">
+          <h3 className="mb-1 flex items-center gap-2 font-serif text-[16px] font-semibold">
+            <BookOpen size={15} className="text-[var(--accent)]" /> เรื่องราวจนถึงตอนที่ {latestRecap.through.toLocaleString()}
+          </h3>
+          <p className="mb-3 text-[12px] text-[var(--fg-dim)]">
+            AI เขียนสรุปนี้ทุกครั้งที่วางแผนเพิ่ม และใช้เป็นความจำระยะยาว — แก้ได้ถ้าอยากเปลี่ยนทิศทาง
+          </p>
+          <textarea
+            value={latestRecap.text}
+            disabled={disabled}
+            onChange={(e) =>
+              onChange({
+                ...outline,
+                recaps: (outline.recaps ?? []).map((r) => (r.through === latestRecap.through ? { ...r, text: e.target.value } : r)),
+              })
+            }
+            rows={6}
+            aria-label="สรุปเรื่องราวล่าสุด"
+            className={cn(inputClass, "resize-y leading-relaxed")}
+          />
+        </section>
+      ) : null}
+
       <section className="gilded rounded-3xl bg-[var(--bg-elev)]/70 p-5">
         <h3 className="mb-3 flex items-center gap-2 font-serif text-[16px] font-semibold">
-          <PenLine size={15} className="text-[var(--accent)]" /> ความยาวของเรื่อง
+          <PenLine size={15} className="text-[var(--accent)]" /> ขนาดและคุณภาพ
         </h3>
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-4 sm:grid-cols-3">
           <label className="block">
             <span className="mb-1.5 block text-[13px] font-medium text-[var(--fg-muted)]">จำนวนตอนทั้งหมด</span>
             <input
               type="number"
-              min={Math.max(1, outline.chapters.length ? 1 : 1)}
-              max={500}
+              min={1}
+              max={MAX_CHAPTERS}
               value={project.chapterCount}
-              onChange={(e) => onProject({ chapterCount: Math.max(1, Math.min(500, Number(e.target.value) || 1)) })}
-              className={cn(inputClass, "h-10")}
+              onChange={(e) => {
+                const chapterCount = Math.max(1, Math.min(MAX_CHAPTERS, Math.round(Number(e.target.value) || 1)));
+                // The roadmap stretches or shrinks with the book: the last arc absorbs the change.
+                const arcs = (outline.arcs ?? []).filter((a) => a.from <= chapterCount).map((a, i, all) =>
+                  i === all.length - 1 ? { ...a, to: chapterCount } : { ...a, to: Math.min(a.to, chapterCount) },
+                );
+                onProject({ chapterCount, outline: { ...outline, arcs } });
+              }}
+              className={cn(inputClass, "h-10 tabular-nums")}
             />
           </label>
           <label className="block">
@@ -598,14 +784,88 @@ function BibleEditor({
               step={100}
               value={project.wordsPerChapter}
               onChange={(e) => onProject({ wordsPerChapter: Math.max(600, Math.min(6000, Number(e.target.value) || 600)) })}
-              className={cn(inputClass, "h-10")}
+              className={cn(inputClass, "h-10 tabular-nums")}
             />
+          </label>
+          <label className="block">
+            <span className="mb-1.5 block text-[13px] font-medium text-[var(--fg-muted)]">คุณภาพการเขียน</span>
+            <select
+              value={project.effort ?? "high"}
+              onChange={(e) => onProject({ effort: e.target.value as "high" | "medium" })}
+              className={cn(inputClass, "h-10")}
+            >
+              <option value="high">ดีที่สุด</option>
+              <option value="medium">ประหยัด</option>
+            </select>
           </label>
         </div>
         <p className="mt-2 text-[11.5px] leading-relaxed text-[var(--fg-dim)]">
-          เพิ่มจำนวนตอนแล้วกด “วางโครงตอนที่เหลือ” เพื่อต่อภาคใหม่ โดย AI จะอ่านคัมภีร์และแผนเดิมก่อน
+          เพิ่มจำนวนตอนได้สูงสุด {MAX_CHAPTERS.toLocaleString()} ตอน — ภาคสุดท้ายในแผนภาคจะยืดออกให้ และตอนใหม่จะถูกวางแผนเมื่อเขียนถึง
         </p>
       </section>
     </div>
+  );
+}
+
+/* -------------------------------- arc roadmap ------------------------------- */
+
+function ArcsEditor({
+  outline,
+  disabled,
+  onChange,
+}: {
+  outline: StoryOutline;
+  disabled: boolean;
+  onChange: (next: StoryOutline) => void;
+}) {
+  const arcs = outline.arcs ?? [];
+  const [open, setOpen] = useState(false);
+  const shown = open ? arcs : arcs.slice(0, 6);
+  const setArc = (i: number, next: Partial<OutlineArc>) =>
+    onChange({ ...outline, arcs: arcs.map((a, k) => (k === i ? { ...a, ...next } : a)) });
+
+  if (!arcs.length) return null;
+
+  return (
+    <section className="gilded rounded-3xl bg-[var(--bg-elev)]/70 p-5">
+      <h3 className="mb-1 flex items-center gap-2 font-serif text-[16px] font-semibold">
+        <MapIcon size={15} className="text-[var(--accent)]" /> แผนภาคของทั้งเรื่อง ({arcs.length})
+      </h3>
+      <p className="mb-3 text-[12px] text-[var(--fg-dim)]">
+        เข็มทิศระยะยาว — ทุกครั้งที่วางแผนรายตอนเพิ่ม AI จะเดินตามภาคที่ตอนนั้นอยู่
+      </p>
+      <ol className="space-y-2">
+        {shown.map((a, i) => (
+          <li key={i} className="rounded-2xl border border-[var(--line)] bg-[var(--bg)]/60 p-3">
+            <div className="flex items-center gap-2">
+              <span className="shrink-0 rounded-md bg-[var(--accent-soft)] px-2 py-0.5 text-[11.5px] font-semibold tabular-nums text-[var(--accent)]">
+                {a.from.toLocaleString()}–{a.to.toLocaleString()}
+              </span>
+              <input
+                value={a.name}
+                disabled={disabled}
+                onChange={(e) => setArc(i, { name: e.target.value })}
+                aria-label="ชื่อภาค"
+                className={cn(inputClass, "h-9 flex-1 font-semibold")}
+              />
+            </div>
+            <textarea
+              value={a.summary}
+              disabled={disabled}
+              onChange={(e) => setArc(i, { summary: e.target.value })}
+              rows={2}
+              aria-label="เนื้อหาของภาค"
+              className={cn(inputClass, "mt-2 resize-y text-[13px] leading-relaxed")}
+            />
+          </li>
+        ))}
+      </ol>
+      {arcs.length > 6 ? (
+        <Button variant="ghost" size="sm" className="mt-2 w-full" onClick={() => setOpen((v) => !v)}>
+          <ChevronDown size={14} className={cn("transition-transform", open && "rotate-180")} />
+          {open ? "ย่อ" : `ดูอีก ${arcs.length - 6} ภาค`}
+        </Button>
+      ) : null}
+    </section>
   );
 }

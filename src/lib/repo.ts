@@ -250,6 +250,8 @@ export async function signUpCloud(
 }
 
 export async function signOutCloud(): Promise<void> {
+  // Unsent novel edits still belong to this reader: send them while we can.
+  flushSeriesPush();
   for (const timer of pending.values()) clearTimeout(timer);
   pending.clear();
   await authSignOut();
@@ -513,9 +515,32 @@ export async function pullSeries(): Promise<Series[]> {
   return [...byId.values()];
 }
 
-async function pushSeries(series: Series): Promise<void> {
+/**
+ * A studio novel carries its whole plan, and the writer saves it after every
+ * chapter; bursts of saves to one novel are coalesced into a single upload.
+ */
+const seriesPending = new Map<string, { timer: ReturnType<typeof setTimeout>; series: Series }>();
+
+function pushSeries(series: Series): void {
   if (!userId) return;
-  await upsertSeries([series], userId);
+  const existing = seriesPending.get(series.id);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    seriesPending.delete(series.id);
+    if (userId) void upsertSeries([series], userId);
+  }, 1500);
+  seriesPending.set(series.id, { timer, series });
+}
+
+/** Sends any coalesced novel saves now — for when the page is going away. */
+export function flushSeriesPush(): void {
+  if (!userId) return;
+  const list = [...seriesPending.values()].map((p) => {
+    clearTimeout(p.timer);
+    return p.series;
+  });
+  seriesPending.clear();
+  if (list.length) void upsertSeries(list, userId);
 }
 
 /**
@@ -559,6 +584,11 @@ export async function listSeries(): Promise<Series[]> {
 }
 
 export async function deleteSeries(id: string): Promise<void> {
+  const queued = seriesPending.get(id);
+  if (queued) {
+    clearTimeout(queued.timer);
+    seriesPending.delete(id);
+  }
   await local.deleteSeries(id);
   const sb = supabase();
   if (sb && userId) await sb.from("series").delete().eq("id", id);

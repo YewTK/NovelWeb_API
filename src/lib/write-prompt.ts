@@ -1,12 +1,18 @@
 import { authorStyle } from "./authors";
 import { LANG_NAME } from "./prompt";
-import type { OutlineChapter, StoryOutline, WritingProject } from "./types";
+import type { OutlineArc, OutlineChapter, OutlineRecap, StoryOutline, WritingProject } from "./types";
 
-/** Chapters planned per outline request; longer novels are planned in batches. */
+/** The longest novel the studio will plan. */
+export const MAX_CHAPTERS = 4000;
+
+/** Chapters planned per outline request. */
 export const OUTLINE_BATCH = 25;
 
 /** Words per request when writing a chapter; longer chapters are written in parts. */
 export const WORDS_PER_PART = 1400;
+
+/** How many recent chapter plans travel with every request. */
+export const PLAN_WINDOW = 8;
 
 /** How many requests one chapter of this length needs. */
 export function partsFor(words: number): number {
@@ -29,15 +35,30 @@ Thai novel craft — this must read as an original Thai web novel, never as a tr
   • modern settings: ผม, ฉัน, คุณ, นาย, เธอ, แก, พี่/น้อง by age;
   • western fantasy: ข้า/เจ้า for nobles and archaic speakers, ผม/ฉัน/คุณ for ordinary modern-voiced people.
 - Drop subjects the way Thai prose naturally does once the referent is clear.
-- No translationese: no dummy "มัน" subjects, no ถูก for every passive, no chains of การ/ความ/ซึ่ง, no "ได้ทำการ".
+- No translationese: no dummy "มัน" subjects, no ถูก for every passive, no chains of การ/ความ/ซึ่ง, no "ได้ทำการ", no "มีความ + adjective" when a plain adjective works.
+- Rich, precise Thai vocabulary — vary verbs of speech and motion (เอ่ย กระซิบ ตวาด พึมพำ ก้าว ถลา ทรุด) instead of repeating พูด/เดิน.
 - Dialogue in Thai quotation marks “ ”. Keep dialogue tags short and varied.
 - Sound effects and interjections read as Thai (เฮือก, ตึง, ปัง, ฮึ่ม, อ๊ะ).
 - Rhythm like popular Thai web novels: short paragraphs, frequent line breaks for impact, occasional one-line paragraphs.`;
 
 const GENERIC_CRAFT = `
-Craft:
+Language craft:
 - Idiomatic, vivid prose in the target language, written like a bestselling web novel.
 - Short paragraphs, varied sentence length, dialogue that sounds like real people.`;
+
+/** What separates a chapter readers binge from one they skim. */
+const QUALITY_BAR = `
+Quality bar — hold every chapter to it:
+- Open in motion: a line of action, dialogue or a striking image. Never open with a recap of the last chapter, a weather report or the protagonist waking up.
+- Every scene turns: someone wants something, something stands in the way, and the situation is different at the end of the scene.
+- Dramatise, don't summarise. The plan's beats become live moments with dialogue, action, sensory detail and interiority — never "and then, over the next days…".
+- Specific over generic: concrete nouns, precise verbs, one telling detail instead of three vague adjectives.
+- Dialogue carries subtext and gives each character a distinct voice; no one explains what both speakers already know.
+- Keep the power system consistent: abilities have costs and limits, and victories are earned.
+- Callbacks: let earlier events, promises and wounds echo, so a long serial feels like one story.
+- Vary your language: do not reuse the same images, catchphrases or sentence openings you used recently; avoid clichés.
+- No moralising, no author's notes, no summary of the chapter at the end.
+- End on a hook that makes the next chapter irresistible.`;
 
 function languageName(code: string): string {
   return LANG_NAME[code] ?? code;
@@ -59,18 +80,38 @@ function premiseBlock(title: string, project: WritingProject): string {
   return lines.join("\n");
 }
 
+/** The cast, capped: the core cast first, then the most recently introduced. */
+function castBlock(outline: StoryOutline): string {
+  const all = outline.characters;
+  const cast = all.length > 36 ? [...all.slice(0, 14), ...all.slice(-22)] : all;
+  return cast.map((c) => `- ${c.name} (${c.role}): ${c.profile}`).join("\n") || "- (introduce characters as the story needs them)";
+}
+
 function bibleBlock(outline: StoryOutline): string {
-  const cast = outline.characters
-    .slice(0, 24)
-    .map((c) => `- ${c.name} (${c.role}): ${c.profile}`)
-    .join("\n");
   return `Logline: ${outline.logline}
 
 World, power system and tone:
 ${outline.world}
 
 Cast:
-${cast || "- (introduce characters as the story needs them)"}`;
+${castBlock(outline)}`;
+}
+
+function arcLine(a: OutlineArc): string {
+  return `- ${a.name} (chapters ${a.from}–${a.to}): ${a.summary}`;
+}
+
+/** The arc a chapter falls in, and the one after it. */
+export function arcsAround(outline: StoryOutline, n: number): { current?: OutlineArc; next?: OutlineArc } {
+  const arcs = outline.arcs ?? [];
+  const i = arcs.findIndex((a) => n >= a.from && n <= a.to);
+  if (i === -1) return {};
+  return { current: arcs[i], next: arcs[i + 1] };
+}
+
+/** The newest recap that covers only chapters before `n` — never one that spoils what comes next. */
+export function recapBefore(outline: StoryOutline, n: number): OutlineRecap | undefined {
+  return (outline.recaps ?? []).filter((r) => r.through < n).sort((a, b) => b.through - a.through)[0];
 }
 
 function chapterLine(c: OutlineChapter): string {
@@ -81,6 +122,7 @@ function chapterLine(c: OutlineChapter): string {
 
 export function buildOutlineSystem(title: string, project: WritingProject): string {
   const lang = languageName(project.language);
+  const long = project.chapterCount > 150;
   return `You are a bestselling web-novel author and story architect planning a serialised novel of ${project.chapterCount} chapters, about ${project.wordsPerChapter} words each, written in ${lang}.
 
 ${premiseBlock(title, project)}
@@ -92,7 +134,8 @@ ${styleBlock(project)}
 
 Planning principles:
 - Serial fiction: every chapter must earn the click on the next. Each chapter has a goal, a complication, and ends on a hook (cliffhanger, reveal, reversal or emotional turn).
-- Pace arcs across the whole length: setup, escalating arcs with mini-climaxes, a midpoint shift, and a climax proportionate to ${project.chapterCount} chapters. If the novel is long, plan it as volumes/arcs that each resolve while opening the next.
+- ${long ? `This is a very long serial. Structure it as arcs (volumes) of roughly 40–150 chapters, each with its own antagonist, goal, mini-climax and change in the protagonist, while a larger mystery and power curve run across the whole book. Pace the power and scale so there is still room to grow at chapter ${project.chapterCount}.` : "Pace the arcs across the whole length: setup, escalation with mini-climaxes, a midpoint shift and a climax proportionate to the length."}
+- Vary chapter types: action, investigation, training, intrigue, quiet character moments, revelations. Avoid repeating the same pattern chapter after chapter.
 - Characters have wants, fears and secrets; relationships change over time. Seed foreshadowing early and pay it off later.
 - The power/magic system has clear rules and costs, introduced gradually through the story rather than dumped.
 - Honour the synopsis, blurb and tags; invent everything they do not specify.
@@ -108,41 +151,46 @@ export function buildOutlineUser(opts: {
   existing: StoryOutline | null;
 }): string {
   const { from, to, total, existing } = opts;
+  const arcCount = Math.min(40, Math.max(3, Math.round(total / 80)));
+
   if (!existing) {
-    return `Create the story bible and plan chapters ${from}–${to} of ${total}.
+    return `Create the story bible, the whole-book arc roadmap, and plan chapters ${from}–${to} of ${total}.
 
 Return exactly this shape:
-{"title":"<the novel's title>","logline":"<one or two sentences>","world":"<setting, power system with its ranks/rules/costs, factions, tone — 120 to 250 words>","characters":[{"name":"","role":"protagonist / heroine / rival / mentor / antagonist …","profile":"<appearance, personality, goal, secret — 25 to 50 words>"}],"chapters":[{"n":${from},"title":"<chapter title>","summary":"<3 to 5 sentences: what happens, the turn, and the hook it ends on>"}]}
+{"title":"<the novel's title>","logline":"<one or two sentences>","world":"<setting, power system with its ranks/rules/costs, factions, tone — 150 to 300 words>","characters":[{"name":"","role":"protagonist / heroine / rival / mentor / antagonist …","profile":"<appearance, personality, goal, secret — 25 to 50 words>"}],"arcs":[{"name":"<arc title>","from":1,"to":<n>,"summary":"<the arc's conflict, turning points and how it changes the protagonist — 2 to 3 sentences>"}],"chapters":[{"n":${from},"title":"<chapter title>","summary":"<3 to 5 sentences: what happens, the turn, and the hook it ends on>"}],"recap":"<the story so far after chapter ${to}: key events, who knows what, open threads — at most 250 words>"}
 
-Include 5 to 12 characters. Include every chapter from ${from} to ${to} exactly once, in order.`;
+Include 6 to 14 characters. The arcs must cover chapters 1–${total} contiguously with no gaps (about ${arcCount} arcs). Include every chapter from ${from} to ${to} exactly once, in order.`;
   }
 
-  const recent = existing.chapters
-    .filter((c) => c.n < from)
-    .slice(-12)
-    .map(chapterLine)
-    .join("\n");
-  const earlier = existing.chapters.filter((c) => c.n < from).length - 12;
+  const recent = existing.chapters.filter((c) => c.n < from).slice(-12).map(chapterLine).join("\n");
+  const recap = recapBefore(existing, from + 1);
+  const { current, next } = arcsAround(existing, from);
+  const roadmap = (existing.arcs ?? []).length
+    ? (existing.arcs ?? []).map(arcLine).join("\n")
+    : "(no roadmap yet)";
 
-  return `Story bible so far:
+  return `Story bible:
 ${bibleBlock(existing)}
 
-${earlier > 0 ? `(${earlier} earlier chapters are already planned.)\n` : ""}Most recent planned chapters:
-${recent}
+Arc roadmap for the whole book:
+${roadmap}
 
-Continue the plan: chapters ${from}–${to} of ${total}. Keep continuity with everything above, escalate the arcs, and move toward the ending appropriate for ${total} chapters${to >= total ? " — chapter " + total + " is the finale and must resolve the main conflict" : ""}.
+${recap ? `The story so far (through chapter ${recap.through}):\n${recap.text}\n\n` : ""}Most recent planned chapters:
+${recent || "(none)"}
+
+Continue the plan: chapters ${from}–${to} of ${total}.${current ? ` These chapters belong to the arc "${current.name}" (chapters ${current.from}–${current.to})${to > current.to && next ? ` and move into "${next.name}"` : ""}; hit that arc's beats at the right pace.` : ""} Keep continuity with everything above and escalate${to >= total ? ` — chapter ${total} is the finale and must resolve the main conflict` : ""}.
 
 Return exactly this shape:
-{"chapters":[{"n":${from},"title":"","summary":"<3 to 5 sentences ending on the hook>"}]}
+{"chapters":[{"n":${from},"title":"","summary":"<3 to 5 sentences ending on the hook>"}],"recap":"<the story so far after chapter ${to}, updated with these chapters — at most 250 words>","newCharacters":[{"name":"","role":"","profile":""}]}
 
-Include every chapter from ${from} to ${to} exactly once, in order.`;
+Include every chapter from ${from} to ${to} exactly once, in order. "newCharacters" lists only important characters introduced in these chapters (it may be empty).`;
 }
 
 /* --------------------------------- chapters -------------------------------- */
 
 /**
  * Identical for every chapter of the novel, so it is sent as a cacheable
- * system prompt: persona, voice, craft rules and the full story bible.
+ * system prompt: persona, voice, craft rules and the story bible.
  */
 export function buildChapterSystem(title: string, project: WritingProject): string {
   const outline = project.outline!;
@@ -154,6 +202,7 @@ ${styleBlock(project)}
 
 Point of view: ${POV_RULE[project.pov]}
 ${project.language === "th" ? THAI_CRAFT : GENERIC_CRAFT}
+${QUALITY_BAR}
 
 Story bible — canon for every chapter:
 ${premiseBlock(title, project)}
@@ -161,10 +210,8 @@ ${premiseBlock(title, project)}
 ${bibleBlock(outline)}
 
 Writing rules:
-- Show, don't summarise: dramatise the chapter's beats as live scenes with dialogue, action, sensory detail and interiority. Never skip past a beat in a sentence.
-- Stay consistent with the bible: names, relationships, abilities, rules and established facts.
+- Stay consistent with the bible, the story so far and the plans: names, relationships, abilities, rules and established facts.
 - Follow the chapter plan you are given, but you may add small scenes, texture and dialogue that serve it. Never advance the plot beyond this chapter's plan — later chapters are already planned.
-- Keep momentum: every scene changes something.
 
 OUTPUT FORMAT — non-negotiable:
 - Plain prose only. Separate paragraphs with a blank line.
@@ -183,30 +230,31 @@ export function buildChapterUser(opts: {
   const { project, n, part, parts, previousText } = opts;
   const outline = project.outline!;
   const plan = outline.chapters.find((c) => c.n === n);
-  const before = outline.chapters.filter((c) => c.n < n);
+  const before = outline.chapters.filter((c) => c.n < n && c.n >= n - PLAN_WINDOW);
   const next = outline.chapters.find((c) => c.n === n + 1);
+  const recap = recapBefore(outline, n);
+  const { current } = arcsAround(outline, n);
   const words = Math.round(project.wordsPerChapter / parts);
   const thai = project.language === "th";
 
   const sections: string[] = [];
 
+  if (current) {
+    sections.push(`Current arc: "${current.name}" (chapters ${current.from}–${current.to}; this is chapter ${n - current.from + 1} of ${current.to - current.from + 1} in it). ${current.summary}`);
+  }
+  if (recap) {
+    // The recap may stop a few chapters short; the plans below fill the gap.
+    sections.push(`The story so far (through chapter ${recap.through}):\n${recap.text}`);
+  }
   if (before.length) {
-    const far = before.slice(0, -6);
-    const near = before.slice(-6);
-    sections.push(
-      `The story so far (chapter plans already written):\n${
-        far.length ? `[chapters 1–${far[far.length - 1].n}, in brief] ${far.map((c) => c.title).join(" · ")}\n` : ""
-      }${near.map(chapterLine).join("\n")}`,
-    );
+    sections.push(`The most recent chapters:\n${before.map(chapterLine).join("\n")}`);
   }
 
   sections.push(
-    `THIS CHAPTER — ${n} of ${project.chapterCount}: ${plan?.title ?? ""}\nPlan: ${plan?.summary ?? "Continue the story naturally."}`,
+    `THIS CHAPTER — ${n} of ${project.chapterCount}: ${plan?.title ?? ""}\nPlan: ${plan?.summary || "Continue the story naturally from where it left off, advancing the current arc."}`,
   );
   if (next) {
-    sections.push(
-      `Next chapter (for foreshadowing only — do NOT write it): ${next.title} — ${next.summary}`,
-    );
+    sections.push(`Next chapter (for foreshadowing only — do NOT write it): ${next.title} — ${next.summary}`);
   }
 
   if (previousText) {
@@ -231,6 +279,37 @@ export function buildChapterUser(opts: {
   return sections.join("\n\n");
 }
 
+/* --------------------------- request trimming ------------------------------ */
+
+/**
+ * Only what a prompt reads travels with each request. A 4,000-chapter plan
+ * and the map of written chapter ids would otherwise be uploaded, in full,
+ * with every single call.
+ */
+export function slimProject(
+  project: WritingProject,
+  from: number,
+  to: number,
+  /** keep the recap the prompt for this chapter will read — never a later one */
+  recapFor: number,
+): WritingProject {
+  const outline = project.outline;
+  return {
+    ...project,
+    chapterIds: {},
+    outline: outline
+      ? {
+          ...outline,
+          chapters: outline.chapters.filter((c) => c.n >= from && c.n <= to),
+          recaps: (() => {
+            const r = recapBefore(outline, recapFor);
+            return r ? [r] : [];
+          })(),
+        }
+      : null,
+  };
+}
+
 /* ---------------------------------- parse ---------------------------------- */
 
 /** Pulls the first JSON object out of a model reply, tolerating stray prose. */
@@ -249,15 +328,7 @@ export function parseJsonObject<T>(raw: string): T | null {
 export function proseToParagraphs(raw: string): string[] {
   return raw
     .replace(/```[a-z]*\n?/gi, "")
-    .split(/\n\s*\n|\r\n\s*\r\n/)
-    .flatMap((block) => {
-      const lines = block
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-      // A single newline inside dialogue-heavy output is usually a new paragraph too.
-      return lines;
-    })
+    .split(/\r?\n/)
     .map((p) => p.replace(/^#{1,6}\s+/, "").trim())
     .filter(Boolean);
 }

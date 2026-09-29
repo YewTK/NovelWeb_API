@@ -3,11 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { BookText, Clock3, Coins, Hash, Loader2, Plus, ScrollText, Wand2, X } from "lucide-react";
 import { TAG_SUGGESTIONS, authorStyle } from "@/lib/authors";
-import { estimateWriting, formatUsd } from "@/lib/cost";
+import { estimateWriting, formatUsd, type WritingEstimate } from "@/lib/cost";
 import { useSettings } from "@/lib/store";
 import type { Pov, WritingProject } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { blankProject } from "@/lib/writer";
+import { MAX_CHAPTERS, OUTLINE_BATCH, blankProject } from "@/lib/writer";
 import { Button, Field, Segmented, Slider, inputClass } from "../ui";
 import { StyleCards } from "./StyleCards";
 
@@ -20,7 +20,33 @@ const LENGTHS = [
   { words: 5000, label: "จัดเต็ม" },
 ];
 
-const COUNTS = [10, 30, 50, 100];
+const COUNTS = [30, 100, 300, 1000, 2000, 4000];
+
+function clampCount(n: number): number {
+  return Math.max(1, Math.min(MAX_CHAPTERS, Math.round(Number.isFinite(n) ? n : 1)));
+}
+
+/* The count slider is logarithmic, so both 10 and 4,000 chapters are easy to hit. */
+function sliderToCount(v: number): number {
+  const raw = Math.exp((v / 1000) * Math.log(MAX_CHAPTERS));
+  const step = raw < 100 ? 1 : raw < 1000 ? 10 : 50;
+  return clampCount(Math.round(raw / step) * step);
+}
+
+function countToSlider(n: number): number {
+  return Math.round((Math.log(Math.max(1, n)) / Math.log(MAX_CHAPTERS)) * 1000);
+}
+
+function formatWords(words: number): string {
+  if (words >= 1_000_000) return `~${(words / 1_000_000).toFixed(1)}M`;
+  return `~${(words / 1000).toFixed(words < 10000 ? 1 : 0)}K`;
+}
+
+function formatMinutes(m: number): string {
+  if (m < 60) return `${m} นาที`;
+  if (m < 60 * 48) return `${(m / 60).toFixed(1)} ชม.`;
+  return `${Math.round(m / 60 / 24)} วัน`;
+}
 
 export interface NewProjectDraft {
   title: string;
@@ -77,7 +103,19 @@ export function NewProject({
   const p = draft.project;
   const patch = (next: Partial<WritingProject>) => setDraft((d) => ({ ...d, project: { ...d.project, ...next } }));
   const style = authorStyle(p.styleId);
-  const estimate = useMemo(() => estimateWriting(p, config), [p, config]);
+  const firstBatch = Math.min(OUTLINE_BATCH, p.chapterCount);
+  const opening = useMemo(
+    () => estimateWriting(p, config, { write: 0, plan: firstBatch, bible: true }),
+    [p, config, firstBatch],
+  );
+  const perTen = useMemo(
+    () => estimateWriting(p, config, { write: Math.min(10, p.chapterCount), plan: Math.min(10, p.chapterCount) }),
+    [p, config],
+  );
+  const whole = useMemo(
+    () => estimateWriting(p, config, { write: p.chapterCount, plan: p.chapterCount, bible: true }),
+    [p, config],
+  );
 
   const addTag = (raw: string) => {
     const tag = raw.trim().replace(/^#/, "");
@@ -212,20 +250,35 @@ export function NewProject({
           <div className="space-y-6">
             <div>
               <Slider
-                label="จำนวนตอน"
-                min={1}
-                max={300}
-                value={p.chapterCount}
-                onChange={(chapterCount) => patch({ chapterCount })}
-                display={`${p.chapterCount} ตอน`}
+                label="จำนวนตอนทั้งเรื่อง"
+                min={0}
+                max={1000}
+                value={countToSlider(p.chapterCount)}
+                onChange={(v) => patch({ chapterCount: sliderToCount(v) })}
+                display={`${p.chapterCount.toLocaleString()} ตอน`}
               />
-              <div className="mt-2.5 flex flex-wrap gap-1.5">
+              <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
                 {COUNTS.map((n) => (
                   <Preset key={n} on={p.chapterCount === n} onClick={() => patch({ chapterCount: n })}>
-                    {n} ตอน
+                    {n.toLocaleString()}
                   </Preset>
                 ))}
+                <label className="ml-auto flex items-center gap-2 text-[12.5px] text-[var(--fg-muted)]">
+                  ระบุเอง
+                  <input
+                    type="number"
+                    min={1}
+                    max={MAX_CHAPTERS}
+                    value={p.chapterCount}
+                    onChange={(e) => patch({ chapterCount: clampCount(Number(e.target.value)) })}
+                    className={cn(inputClass, "h-8 w-24 py-1 text-right tabular-nums")}
+                  />
+                </label>
               </div>
+              <p className="mt-2.5 rounded-xl bg-[var(--accent-soft)] px-3 py-2 text-[12px] leading-relaxed text-[var(--fg-muted)]">
+                AI จะวาง <b className="text-[var(--fg)]">แผนภาคของทั้งเรื่อง</b> กับแผนรายตอน {Math.min(OUTLINE_BATCH, p.chapterCount)} ตอนแรกก่อน —
+                ตอนที่เหลือจะถูกวางแผนทีละชุดอัตโนมัติเมื่อเขียนใกล้ถึง จึงจ่ายเฉพาะส่วนที่ใช้จริง
+              </p>
             </div>
             <div>
               <Slider
@@ -268,6 +321,19 @@ export function NewProject({
                 />
               </Field>
             </div>
+            <Field
+              label="คุณภาพการเขียน"
+              hint="“ดีที่สุด” ให้โมเดลคิดวางฉากอย่างละเอียดก่อนเขียน สำนวนแน่นกว่าแต่ใช้ token มากกว่า"
+            >
+              <Segmented<"high" | "medium">
+                value={p.effort ?? "high"}
+                onChange={(effort) => patch({ effort })}
+                options={[
+                  { value: "high", label: "ดีที่สุด" },
+                  { value: "medium", label: "ประหยัด" },
+                ]}
+              />
+            </Field>
           </div>
         </Card>
       </div>
@@ -283,17 +349,17 @@ export function NewProject({
           </p>
 
           <dl className="mt-4 grid grid-cols-2 gap-2">
-            <Stat label="ตอน" value={p.chapterCount.toLocaleString()} />
-            <Stat label="คำทั้งเรื่อง" value={`~${(estimate.words / 1000).toFixed(estimate.words < 10000 ? 1 : 0)}K`} />
-            <Stat label="เวลาโดยประมาณ" value={estimate.minutes < 60 ? `${estimate.minutes} นาที` : `${(estimate.minutes / 60).toFixed(1)} ชม.`} />
-            <Stat
-              label="ค่า API"
-              value={estimate.usd === null ? "—" : formatUsd(estimate.usd)}
-              icon={<Coins size={11} />}
-            />
+            <Stat label="ตอนทั้งเรื่อง" value={p.chapterCount.toLocaleString()} />
+            <Stat label="คำทั้งเรื่อง" value={formatWords(whole.words)} />
           </dl>
+
+          <div className="mt-3 space-y-1.5 rounded-2xl border border-[var(--line)] bg-[var(--bg)]/60 p-3 text-[12.5px]">
+            <CostRow label={`เริ่มต้น: โครงเรื่อง + แผน ${firstBatch} ตอน`} est={opening} />
+            <CostRow label="เขียนเพิ่มทุก ๆ 10 ตอน" est={perTen} />
+            <CostRow label="ถ้าเขียนจนจบทั้งเรื่อง" est={whole} muted />
+          </div>
           <p className="mt-3 text-[11.5px] leading-relaxed text-[var(--fg-dim)]">
-            ตัวเลขประมาณการสำหรับทั้งเรื่อง — คุณเลือกเขียนทีละกี่ตอนก็ได้ และหยุดได้ทุกเมื่อ
+            เป็นตัวเลขประมาณ — หลังสร้างโปรเจกต์ คุณเลือกได้ว่าจะเขียนถึงตอนที่เท่าไหร่ และหยุดได้ทุกเมื่อ
           </p>
 
           {touched && problems.length ? (
@@ -306,7 +372,7 @@ export function NewProject({
 
           <Button variant="magic" size="lg" className="mt-5 w-full" onClick={submit} disabled={busy}>
             {busy ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-            {busy ? "มีงานเขียนค้างอยู่" : "วางโครงเรื่องทั้งเล่ม"}
+            {busy ? "มีงานเขียนค้างอยู่" : "สร้างโปรเจกต์และวางโครงเรื่อง"}
           </Button>
           <p className="mt-2 text-center text-[11.5px] text-[var(--fg-dim)]">ขั้นต่อไป: ตรวจแก้โครงเรื่องก่อนเริ่มเขียน</p>
         </div>
@@ -358,6 +424,18 @@ function Stat({ label, value, icon }: { label: string; value: string; icon?: Rea
         {icon}
         {label}
       </dt>
+    </div>
+  );
+}
+
+function CostRow({ label, est, muted }: { label: string; est: WritingEstimate; muted?: boolean }) {
+  return (
+    <div className={cn("flex items-baseline gap-2", muted && "text-[var(--fg-dim)]")}>
+      <span className="min-w-0 flex-1 leading-snug">{label}</span>
+      <span className="shrink-0 tabular-nums text-[var(--fg-muted)]">{formatMinutes(est.minutes)}</span>
+      <span className={cn("w-[72px] shrink-0 text-right font-semibold tabular-nums", !muted && "text-[var(--accent)]")}>
+        {est.usd === null ? "—" : formatUsd(est.usd)}
+      </span>
     </div>
   );
 }

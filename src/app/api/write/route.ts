@@ -1,5 +1,7 @@
 import { streamText, toProviderError } from "@/lib/ai";
 import {
+  MAX_CHAPTERS,
+  OUTLINE_BATCH,
   buildChapterSystem,
   buildChapterUser,
   buildOutlineSystem,
@@ -45,7 +47,10 @@ export async function POST(req: Request) {
   if (!body.config?.apiKey) return bad("ยังไม่ได้ตั้งค่า API Key", 401);
   if (!body.project) return bad("ไม่มีข้อมูลโปรเจกต์");
 
-  const project = body.project;
+  const project = {
+    ...body.project,
+    chapterCount: Math.max(1, Math.min(MAX_CHAPTERS, Math.round(body.project.chapterCount || 1))),
+  };
   const isOutline = body.mode === "outline";
   let system: string;
   let user: string;
@@ -53,12 +58,16 @@ export async function POST(req: Request) {
 
   if (isOutline) {
     const from = Math.max(1, body.from ?? 1);
-    const to = Math.max(from, Math.min(project.chapterCount, body.to ?? from));
+    const to = Math.max(from, Math.min(project.chapterCount, body.to ?? from, from + OUTLINE_BATCH * 2 - 1));
     system = buildOutlineSystem(body.title, project);
     user = buildOutlineUser({ from, to, total: project.chapterCount, existing: project.outline });
     // Thai costs roughly a token per character; each planned chapter is a few sentences.
-    const perChapter = project.language === "th" ? 260 : 130;
-    maxTokens = Math.min(32000, 2500 + (to - from + 1) * perChapter + (project.outline ? 0 : 3500));
+    const thai = project.language === "th";
+    const perChapter = thai ? 260 : 130;
+    // The opening request also writes the bible and the whole-book roadmap.
+    const arcs = Math.min(40, Math.max(3, Math.round(project.chapterCount / 80)));
+    const opening = project.outline ? 0 : 3500 + arcs * (thai ? 200 : 100);
+    maxTokens = Math.min(32000, 3000 + (to - from + 1) * perChapter + opening);
   } else {
     if (!project.outline) return bad("ยังไม่มีโครงเรื่อง");
     const n = body.n ?? 1;

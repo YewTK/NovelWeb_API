@@ -38,7 +38,7 @@ export function Studio({
   onSelect: (id: string | null) => void;
   onCreate: (draft: NewProjectDraft) => void;
   onPatch: (id: string, patch: Partial<WritingProject>, name?: string) => void;
-  onPlan: (id: string) => void;
+  onPlan: (id: string, upTo?: number) => void;
   onWrite: (id: string, numbers: number[]) => void;
   onStop: () => void;
   onOpenChapter: (id: string) => void;
@@ -98,7 +98,7 @@ export function Studio({
             writer={writer}
             live={live && live.seriesId === active.id ? live : null}
             onPatch={(patch, name) => onPatch(active.id, patch, name)}
-            onPlan={() => onPlan(active.id)}
+            onPlan={(upTo) => onPlan(active.id, upTo)}
             onWrite={(numbers) => onWrite(active.id, numbers)}
             onStop={onStop}
             onOpenChapter={onOpenChapter}

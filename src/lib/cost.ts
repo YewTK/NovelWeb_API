@@ -59,21 +59,26 @@ export interface WritingEstimate {
 export function estimateWriting(
   project: { chapterCount: number; wordsPerChapter: number; language: string },
   config: ProviderConfig,
-  chapters = project.chapterCount,
-  /** false when the plan already exists and only chapters remain */
-  withOutline = true,
+  work: {
+    /** chapters to write */
+    write: number;
+    /** chapters to plan on the way */
+    plan: number;
+    /** the opening request that writes the bible and roadmap */
+    bible?: boolean;
+  },
 ): WritingEstimate {
-  const perWord = project.language === "th" ? 4.4 : 1.5;
+  const thai = project.language === "th";
+  const perWord = thai ? 4.4 : 1.5;
   const parts = Math.max(1, Math.ceil(project.wordsPerChapter / 1400));
-  const words = chapters * project.wordsPerChapter;
-  const outline = withOutline ? project.chapterCount * (project.language === "th" ? 260 : 130) + 3500 : 0;
-  const outputTokens = Math.round(words * perWord + outline);
-  const requests = chapters * parts + (withOutline ? Math.ceil(project.chapterCount / 25) : 0);
-  // ~4k tokens of bible and context per request, ~70% of it cache reads at a tenth of the price.
-  const inputTokens = requests * 4000;
+  const words = work.write * project.wordsPerChapter;
+  const arcs = Math.min(40, Math.max(3, Math.round(project.chapterCount / 80)));
+  const planTokens = work.plan * (thai ? 260 : 130) + (work.bible ? 3500 + arcs * (thai ? 200 : 100) : 0);
+  const outputTokens = Math.round(words * perWord + planTokens);
+  const requests = work.write * parts + Math.ceil(work.plan / 25);
+  // ~5k tokens of bible and context per request, most of it cache reads at a tenth of the price.
+  const inputTokens = requests * 5000;
   const price = PRICES[config.model];
-  const usd = price
-    ? (inputTokens * price.in * 0.37 + outputTokens * price.out) / 1_000_000
-    : null;
+  const usd = price ? (inputTokens * price.in * 0.4 + outputTokens * price.out) / 1_000_000 : null;
   return { words, requests, outputTokens, usd, minutes: Math.max(1, Math.round(outputTokens / 70 / 60)) };
 }
