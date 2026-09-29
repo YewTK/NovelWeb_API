@@ -319,7 +319,7 @@ export function GlossarySheet({
               type="submit"
               aria-label="เพิ่มคำศัพท์"
               disabled={!source.trim() || !target.trim()}
-              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[var(--accent-strong)] text-white transition-opacity disabled:opacity-35"
+              className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[var(--accent-strong)] text-[var(--accent-ink)] transition-opacity disabled:opacity-35"
             >
               {existing >= 0 ? <Check size={18} /> : <Plus size={19} />}
             </button>

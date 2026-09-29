@@ -1,27 +1,32 @@
 "use client";
 
 import { memo, useEffect, useMemo, useState } from "react";
-import { BookOpen, Library, Loader2, Play } from "lucide-react";
-import type { Chapter, Series } from "@/lib/types";
+import { BookOpen, Feather, Library, Loader2, Play, Search } from "lucide-react";
+import type { ChapterMeta, Series } from "@/lib/types";
 import { chapterLabel, chapterNumber } from "@/lib/series";
 import { statusOf, type ReadMark } from "@/lib/reading";
 import { cn } from "@/lib/utils";
 
 export interface Shelf {
   series: Series;
-  chapters: Chapter[];
+  chapters: ChapterMeta[];
   updatedAt: number;
 }
 
+/** Novels written in the studio, as opposed to translated from a source. */
+export function isOriginal(series: Series): boolean {
+  return Boolean(series.info?.project);
+}
+
 /** Groups the library into one shelf per novel, newest activity first. */
-export function buildShelves(series: Series[], chapters: Chapter[]): Shelf[] {
+export function buildShelves(series: Series[], chapters: ChapterMeta[]): Shelf[] {
   const byId = new Map<string, Shelf>();
 
   for (const s of series) {
     byId.set(s.id, { series: s, chapters: [], updatedAt: s.updatedAt });
   }
 
-  const orphans: Chapter[] = [];
+  const orphans: ChapterMeta[] = [];
   for (const c of chapters) {
     const shelf = c.seriesId ? byId.get(c.seriesId) : undefined;
     if (shelf) {
@@ -77,8 +82,9 @@ export function hueOf(seed: string): number {
 }
 
 /**
- * A generated book cover: the novel's own colour, its title set like a
- * paperback, and a spine highlight. Sized by its parent.
+ * A book cover: the reader's own image, or a generated one in the novel's
+ * colour with a gilt frame and a title set like a hardback. Sized by its
+ * parent; tilts toward the pointer when its card is hovered.
  */
 export function Cover({
   name,
@@ -87,6 +93,8 @@ export function Cover({
   image,
   className,
   size = "md",
+  priority = false,
+  flat = false,
 }: {
   name: string;
   seed: string;
@@ -95,81 +103,94 @@ export function Cover({
   image?: string;
   className?: string;
   size?: "sm" | "md" | "lg";
+  /** above the fold: fetch eagerly */
+  priority?: boolean;
+  /** no hover tilt, e.g. inside a form */
+  flat?: boolean;
 }) {
   const hue = hueOf(seed || name);
   const [broken, setBroken] = useState(false);
-  useEffect(() => setBroken(false), [image]);
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    setBroken(false);
+    setLoaded(false);
+  }, [image]);
+
+  const shell = cn(
+    "relative aspect-[2/3] w-full overflow-hidden rounded-[6px_10px_10px_6px]",
+    "shadow-[0_18px_30px_-16px_rgba(0,0,0,.75),0_2px_6px_-2px_rgba(0,0,0,.4)] ring-1 ring-black/10",
+    !flat && "book-tilt",
+    className,
+  );
 
   if (image && !broken) {
     return (
-      <div
-        className={cn(
-          "relative aspect-[2/3] w-full overflow-hidden rounded-lg bg-[var(--bg-elev-2)] shadow-[0_8px_20px_-8px_rgba(0,0,0,.45)] ring-1 ring-black/5",
-          className,
-        )}
-      >
+      <div className={cn(shell, "bg-[var(--bg-elev-2)]")}>
+        {!loaded ? <div className="shimmer absolute inset-0" aria-hidden /> : null}
         {/* eslint-disable-next-line @next/next/no-img-element -- data URLs and arbitrary hosts */}
         <img
           src={image}
           alt={name ? `ปก ${name}` : ""}
-          loading="lazy"
+          loading={priority ? "eager" : "lazy"}
           decoding="async"
+          fetchPriority={priority ? "high" : "auto"}
           referrerPolicy="no-referrer"
           draggable={false}
+          onLoad={() => setLoaded(true)}
           onError={() => setBroken(true)}
-          className="absolute inset-0 h-full w-full object-cover"
+          className={cn(
+            "absolute inset-0 h-full w-full object-cover transition-opacity duration-500",
+            loaded ? "opacity-100" : "opacity-0",
+          )}
         />
+        <span className="book-spine-light" />
+        <span className="book-sheen" />
       </div>
     );
   }
 
   return (
     <div
-      className={cn(
-        "relative aspect-[2/3] w-full overflow-hidden rounded-lg shadow-[0_8px_20px_-8px_rgba(0,0,0,.45)] ring-1 ring-black/5",
-        className,
-      )}
+      className={shell}
       style={{
-        background: `linear-gradient(155deg, hsl(${hue} 55% 56%) 0%, hsl(${(hue + 30) % 360} 50% 38%) 60%, hsl(${(hue + 50) % 360} 45% 24%) 100%)`,
+        background: `radial-gradient(120% 70% at 70% 75%, hsl(${(hue + 20) % 360} 60% 60% / .35), transparent 60%), linear-gradient(160deg, hsl(${hue} 52% 46%) 0%, hsl(${(hue + 30) % 360} 48% 28%) 58%, hsl(${(hue + 50) % 360} 45% 14%) 100%)`,
       }}
       aria-hidden
     >
-      <span className="absolute inset-y-0 left-0 w-[6%] bg-gradient-to-r from-black/25 to-white/10" />
-      <span className="absolute inset-x-[10%] top-[9%] h-px bg-white/35" />
+      <span className="absolute inset-[6%] rounded-[3px] border border-[rgba(255,226,160,.55)]" />
+      <span className="absolute inset-[8%] rounded-[2px] border border-[rgba(255,226,160,.25)]" />
       <div
         className={cn(
-          "absolute inset-x-[12%] top-[14%] font-serif font-semibold leading-snug text-white [text-shadow:0_1px_2px_rgba(0,0,0,.35)]",
-          size === "sm" && "line-clamp-4 text-[11px]",
+          "absolute inset-x-[14%] top-[15%] font-serif font-semibold leading-snug text-white [text-shadow:0_1px_3px_rgba(0,0,0,.45)]",
+          size === "sm" && "line-clamp-4 text-[10.5px]",
           size === "md" && "line-clamp-5 text-[13px] sm:text-[14px]",
-          size === "lg" && "line-clamp-5 text-[16px]",
+          size === "lg" && "line-clamp-5 text-[17px]",
         )}
       >
         {name}
       </div>
+      <span className="absolute inset-x-[30%] top-[11%] h-px bg-[rgba(255,226,160,.6)]" />
       {author ? (
         <div
           className={cn(
-            "absolute inset-x-[12%] bottom-[9%] truncate text-white/80",
-            size === "sm" ? "text-[9px]" : "text-[11px]",
+            "absolute inset-x-[14%] bottom-[11%] truncate text-white/80",
+            size === "sm" ? "text-[8.5px]" : "text-[11px]",
           )}
         >
           {author}
         </div>
       ) : (
-        <BookOpen
-          className="absolute bottom-[9%] right-[12%] text-white/55"
-          size={size === "sm" ? 12 : 16}
-        />
+        <BookOpen className="absolute bottom-[11%] right-[14%] text-[rgba(255,226,160,.7)]" size={size === "sm" ? 11 : 16} />
       )}
+      <span className="book-spine-light" />
+      <span className="book-sheen" />
     </div>
   );
 }
 
 /** "ตอนที่ 1780–1782" across a whole shelf, or null when nothing is numbered. */
-export function chapterRange(chapters: Chapter[]): string | null {
-  const numbers = chapters
-    .map((c) => chapterNumber(c))
-    .filter((n): n is number => n !== null);
+export function chapterRange(chapters: ChapterMeta[]): string | null {
+  const numbers = chapters.map((c) => chapterNumber(c)).filter((n): n is number => n !== null);
   if (!numbers.length) return null;
   const low = Math.min(...numbers);
   const high = Math.max(...numbers);
@@ -184,9 +205,9 @@ export function readCount(shelf: Shelf, marks: Record<string, ReadMark>): number
 export function resumeTarget(
   shelf: Shelf,
   marks: Record<string, ReadMark>,
-): { chapter: Chapter; started: boolean } | null {
+): { chapter: ChapterMeta; started: boolean } | null {
   if (!shelf.chapters.length) return null;
-  let latest: Chapter | null = null;
+  let latest: ChapterMeta | null = null;
   let at = 0;
   for (const c of shelf.chapters) {
     const opened = marks[c.id]?.openedAt ?? 0;
@@ -208,6 +229,12 @@ export function resumeTarget(
   return { chapter: shelf.chapters[0], started: false };
 }
 
+export function lastOpened(shelf: Shelf, marks: Record<string, ReadMark>): number {
+  let at = 0;
+  for (const c of shelf.chapters) at = Math.max(at, marks[c.id]?.openedAt ?? 0);
+  return at;
+}
+
 /* ----------------------------- continue reading ---------------------------- */
 
 export function ContinueReading({
@@ -224,33 +251,31 @@ export function ContinueReading({
       .map((shelf) => {
         const target = resumeTarget(shelf, marks);
         if (!target?.started) return null;
-        const lastOpened = Math.max(
-          ...shelf.chapters.map((c) => marks[c.id]?.openedAt ?? 0),
-        );
-        return { shelf, chapter: target.chapter, lastOpened };
+        return { shelf, chapter: target.chapter, lastOpened: lastOpened(shelf, marks) };
       })
       .filter((x): x is NonNullable<typeof x> => Boolean(x))
       .sort((a, b) => b.lastOpened - a.lastOpened)
-      .slice(0, 8);
+      .slice(0, 10);
   }, [shelves, marks]);
 
   if (!items.length) return null;
 
   return (
-    <section className="mx-auto w-full max-w-[1080px] px-4 pb-8 sm:px-6">
-      <h2 className="mb-3 text-[17px] font-semibold tracking-tight">อ่านต่อ</h2>
-      <div className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none] sm:-mx-6 sm:px-6 [&::-webkit-scrollbar]:hidden">
+    <section className="mx-auto w-full max-w-[1180px] px-4 pb-10 sm:px-6">
+      <SectionTitle icon={<Play size={15} />} title="อ่านต่อจากที่ค้างไว้" />
+      <div className="no-scrollbar -mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-2 sm:-mx-6 sm:px-6">
         {items.map(({ shelf, chapter }) => {
           const mark = marks[chapter.id];
           const pct = Math.round((mark?.progress ?? 0) * 100);
           const label = chapterLabel(chapterNumber(chapter));
+          const title = chapter.translatedTitle || chapter.title;
           return (
             <button
               key={shelf.series.id || "orphans"}
               onClick={() => onOpenChapter(chapter.id)}
-              className="group flex w-[270px] shrink-0 snap-start items-center gap-3 rounded-2xl border border-[var(--line)] bg-[var(--bg-elev)] p-2.5 text-left transition-colors hover:border-[var(--fg-dim)]"
+              className="group gilded flex w-[290px] shrink-0 snap-start items-center gap-3 rounded-2xl bg-[var(--bg-elev)]/80 p-3 text-left transition-colors hover:bg-[var(--bg-elev-2)]"
             >
-              <div className="w-[52px] shrink-0">
+              <div className="w-[54px] shrink-0">
                 <Cover
                   name={shelf.series.name}
                   seed={shelf.series.key || shelf.series.id}
@@ -259,26 +284,19 @@ export function ContinueReading({
                 />
               </div>
               <span className="min-w-0 flex-1">
-                <span className="line-clamp-1 text-[14px] font-semibold">
-                  {shelf.series.name}
-                </span>
+                <span className="line-clamp-1 text-[14px] font-semibold">{shelf.series.name}</span>
                 <span className="mt-0.5 line-clamp-1 text-[12.5px] text-[var(--fg-muted)]">
-                  {label && !(chapter.translatedTitle || chapter.title).includes(label)
-                    ? `${label} · `
-                    : ""}
-                  {chapter.translatedTitle || chapter.title}
+                  {label && !title.includes(label) ? `${label} · ` : ""}
+                  {title}
                 </span>
                 <span className="mt-2 flex items-center gap-2">
                   <span className="h-1 flex-1 overflow-hidden rounded-full bg-[var(--line)]">
-                    <span
-                      className="block h-full rounded-full bg-[var(--accent)]"
-                      style={{ width: `${pct}%` }}
-                    />
+                    <span className="block h-full rounded-full bg-[var(--accent)]" style={{ width: `${pct}%` }} />
                   </span>
                   <span className="text-[11px] tabular-nums text-[var(--fg-dim)]">{pct}%</span>
                 </span>
               </span>
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--accent-strong)] text-white transition-transform group-hover:scale-105">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[var(--accent-strong)] text-[var(--accent-ink)] transition-transform group-hover:scale-110">
                 <Play size={14} className="translate-x-px" fill="currentColor" />
               </span>
             </button>
@@ -289,57 +307,85 @@ export function ContinueReading({
   );
 }
 
+export function SectionTitle({
+  icon,
+  title,
+  trailing,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <div className="mb-4 flex items-center gap-2.5">
+      <span className="grid h-8 w-8 place-items-center rounded-xl bg-[var(--accent-soft)] text-[var(--accent)] ring-1 ring-[var(--accent-line)]">
+        {icon}
+      </span>
+      <h2 className="font-serif text-[19px] font-semibold tracking-tight">{title}</h2>
+      <div className="flex-1" />
+      {trailing}
+    </div>
+  );
+}
+
 /* -------------------------------- the shelf ------------------------------- */
 
 type SortKey = "recent" | "name" | "chapters";
+type FilterKey = "all" | "translated" | "original" | "unread";
 
 const BookCard = memo(function BookCard({
   shelf,
   read,
-  translating,
+  busy,
   onOpen,
+  priority,
 }: {
   shelf: Shelf;
   read: number;
-  translating: boolean;
+  /** "translating" / "writing" while a job for this novel runs */
+  busy: string | null;
   onOpen: (id: string) => void;
+  priority: boolean;
 }) {
   const total = shelf.chapters.length;
   const done = shelf.chapters.filter((c) => c.status === "done").length;
   const pct = total ? Math.round((read / total) * 100) : 0;
+  const original = isOriginal(shelf.series);
 
   return (
-    <button
-      onClick={() => onOpen(shelf.series.id)}
-      className="group block w-full text-left"
-    >
-      <div className="relative transition-transform duration-200 group-hover:-translate-y-1">
+    <button onClick={() => onOpen(shelf.series.id)} className="group cv-auto block w-full text-left [contain-intrinsic-size:auto_300px]">
+      <div className="relative">
         <Cover
           name={shelf.series.name}
           seed={shelf.series.key || shelf.series.id}
           author={shelf.series.info?.author}
           image={shelf.series.info?.cover}
+          priority={priority}
         />
-        {translating ? (
-          <span className="absolute left-1.5 top-1.5 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-0.5 text-[10.5px] font-medium text-white backdrop-blur">
-            <Loader2 size={10} className="animate-spin" /> กำลังแปล
-          </span>
-        ) : null}
+        <div className="pointer-events-none absolute left-1.5 top-1.5 flex flex-col items-start gap-1">
+          {busy ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-black/65 px-2 py-0.5 text-[10.5px] font-medium text-white backdrop-blur">
+              <Loader2 size={10} className="animate-spin" /> {busy}
+            </span>
+          ) : null}
+          {original ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[color-mix(in_oklab,var(--magic)_80%,black)] px-2 py-0.5 text-[10px] font-semibold text-white">
+              <Feather size={9} /> AI เขียน
+            </span>
+          ) : null}
+        </div>
         {read > 0 ? (
-          <span className="absolute inset-x-0 bottom-0 h-1 overflow-hidden rounded-b-lg bg-black/30">
-            <span
-              className="block h-full bg-[var(--accent)]"
-              style={{ width: `${pct}%` }}
-            />
+          <span className="absolute inset-x-1 bottom-1 h-1 overflow-hidden rounded-full bg-black/40">
+            <span className="block h-full bg-[var(--accent)]" style={{ width: `${pct}%` }} />
           </span>
         ) : null}
       </div>
-      <p className="mt-2 line-clamp-2 text-[13.5px] font-semibold leading-snug">
+      <p className="mt-2.5 line-clamp-2 text-[13.5px] font-semibold leading-snug transition-colors group-hover:text-[var(--accent)]">
         {shelf.series.name}
       </p>
       <p className="mt-0.5 text-[11.5px] text-[var(--fg-dim)]">
         {total} ตอน
-        {done < total ? ` · แปลแล้ว ${done}` : ""}
+        {done < total ? ` · ${original ? "เขียน" : "แปล"}แล้ว ${done}` : ""}
         {read > 0 ? ` · อ่าน ${read}` : ""}
       </p>
     </button>
@@ -349,53 +395,93 @@ const BookCard = memo(function BookCard({
 export function Bookshelf({
   shelves,
   marks,
-  activeSeriesId,
+  activity,
   onOpen,
 }: {
   shelves: Shelf[];
   marks: Record<string, ReadMark>;
-  /** novel whose chapter is being translated right now */
-  activeSeriesId: string | null;
+  /** novel id → what is running for it right now */
+  activity: Record<string, string>;
   onOpen: (seriesId: string) => void;
 }) {
   const [sort, setSort] = useState<SortKey>("recent");
+  const [filter, setFilter] = useState<FilterKey>("all");
   const [query, setQuery] = useState("");
+
+  const counts = useMemo(
+    () => ({
+      all: shelves.length,
+      translated: shelves.filter((s) => !isOriginal(s.series)).length,
+      original: shelves.filter((s) => isOriginal(s.series)).length,
+      unread: shelves.filter((s) => readCount(s, marks) === 0).length,
+    }),
+    [shelves, marks],
+  );
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const list = needle
-      ? shelves.filter((s) =>
-          `${s.series.name} ${s.series.info?.originalTitle ?? ""} ${s.series.info?.author ?? ""}`
-            .toLowerCase()
-            .includes(needle),
-        )
-      : shelves;
+    let list = shelves;
+    if (filter === "translated") list = list.filter((s) => !isOriginal(s.series));
+    if (filter === "original") list = list.filter((s) => isOriginal(s.series));
+    if (filter === "unread") list = list.filter((s) => readCount(s, marks) === 0);
+    if (needle) {
+      list = list.filter((s) =>
+        `${s.series.name} ${s.series.info?.originalTitle ?? ""} ${s.series.info?.author ?? ""} ${(s.series.info?.genres ?? []).join(" ")}`
+          .toLowerCase()
+          .includes(needle),
+      );
+    }
     if (sort === "name") return [...list].sort((a, b) => a.series.name.localeCompare(b.series.name, "th"));
     if (sort === "chapters") return [...list].sort((a, b) => b.chapters.length - a.chapters.length);
     return list;
-  }, [shelves, sort, query]);
+  }, [shelves, sort, filter, query, marks]);
 
   if (shelves.length === 0) return null;
 
+  const FILTERS: [FilterKey, string][] = [
+    ["all", "ทั้งหมด"],
+    ["translated", "แปล"],
+    ["original", "AI เขียน"],
+    ["unread", "ยังไม่อ่าน"],
+  ];
+
   return (
-    <section className="mx-auto w-full max-w-[1080px] px-4 pb-28 sm:px-6">
-      <div className="mb-4 flex flex-wrap items-center gap-2">
-        <h2 className="mr-auto flex items-center gap-2 text-[17px] font-semibold tracking-tight">
-          <Library size={17} className="text-[var(--accent)]" /> ชั้นหนังสือของฉัน
-          <span className="text-[13px] font-normal text-[var(--fg-dim)]">
-            {shelves.length} เรื่อง
-          </span>
-        </h2>
-        <div className="flex w-full items-center gap-2 sm:w-auto">
-          {shelves.length > 4 ? (
+    <section id="library" className="mx-auto w-full max-w-[1180px] scroll-mt-20 px-4 pb-32 sm:px-6">
+      <SectionTitle
+        icon={<Library size={15} />}
+        title="ชั้นหนังสือของฉัน"
+        trailing={<span className="text-[13px] text-[var(--fg-dim)]">{shelves.length} เรื่อง</span>}
+      />
+
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+        <div className="no-scrollbar -mx-4 flex gap-1.5 overflow-x-auto px-4 sm:mx-0 sm:px-0">
+          {FILTERS.filter(([k]) => k === "all" || counts[k] > 0).map(([key, label]) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              aria-pressed={filter === key}
+              className={cn(
+                "h-9 shrink-0 rounded-full border px-3.5 text-[13px] font-medium transition-colors",
+                filter === key
+                  ? "border-[var(--accent-line)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                  : "border-[var(--line)] bg-[var(--bg-elev)]/60 text-[var(--fg-muted)] hover:text-[var(--fg)]",
+              )}
+            >
+              {label} <span className="ml-0.5 tabular-nums opacity-60">{counts[key]}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex flex-1 items-center gap-2 sm:justify-end">
+          <label className="relative min-w-0 flex-1 sm:max-w-[240px]">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--fg-dim)]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="ค้นหาเรื่อง…"
+              placeholder="ค้นหาชื่อ ผู้แต่ง แนว…"
               type="search"
-              className="h-9 min-w-0 flex-1 rounded-full border border-[var(--line)] bg-[var(--bg-elev)] px-3.5 text-base outline-none transition-colors placeholder:text-[var(--fg-dim)] focus:border-[var(--accent)] sm:w-48 sm:flex-none sm:text-[13px]"
+              className="h-9 w-full rounded-full border border-[var(--line)] bg-[var(--bg-elev)]/70 pl-8 pr-3.5 text-base outline-none transition-colors placeholder:text-[var(--fg-dim)] focus:border-[var(--accent)] sm:text-[13px]"
             />
-          ) : null}
+          </label>
           <select
             value={sort}
             onChange={(e) => setSort(e.target.value as SortKey)}
@@ -410,18 +496,19 @@ export function Bookshelf({
       </div>
 
       {visible.length === 0 ? (
-        <p className="rounded-2xl border border-dashed border-[var(--line)] px-4 py-10 text-center text-[13px] text-[var(--fg-dim)]">
-          ไม่พบเรื่องที่ตรงกับ “{query.trim()}”
+        <p className="rounded-2xl border border-dashed border-[var(--line)] px-4 py-12 text-center text-[13px] text-[var(--fg-dim)]">
+          {query.trim() ? `ไม่พบเรื่องที่ตรงกับ “${query.trim()}”` : "ยังไม่มีเรื่องในหมวดนี้"}
         </p>
       ) : (
-        <div className="grid grid-cols-3 gap-x-3 gap-y-6 sm:grid-cols-4 sm:gap-x-5 md:grid-cols-5 lg:grid-cols-6">
-          {visible.map((shelf) => (
+        <div className="grid grid-cols-3 gap-x-3 gap-y-7 sm:grid-cols-4 sm:gap-x-5 md:grid-cols-5 lg:grid-cols-6">
+          {visible.map((shelf, i) => (
             <BookCard
               key={shelf.series.id || "orphans"}
               shelf={shelf}
               read={readCount(shelf, marks)}
-              translating={activeSeriesId !== null && shelf.series.id === activeSeriesId}
+              busy={activity[shelf.series.id] ?? null}
               onOpen={onOpen}
+              priority={i < 6}
             />
           ))}
         </div>

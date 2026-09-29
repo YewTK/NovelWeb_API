@@ -91,6 +91,9 @@ export function BookInfoSheet({
       status: info.status || undefined,
       sourceLanguage: info.sourceLanguage?.trim() || undefined,
       synopsis: info.synopsis?.trim() || undefined,
+      blurb: info.blurb?.trim() || undefined,
+      // Studio novels keep their plan; this sheet never edits it.
+      project: series?.info?.project,
       translatorNotes: info.translatorNotes?.trim() || undefined,
       sourceUrl: info.sourceUrl?.trim() || undefined,
       cover: info.cover?.trim() || undefined,
@@ -125,6 +128,7 @@ export function BookInfoSheet({
                 seed={series?.key || series?.id || ""}
                 author={info.author}
                 image={info.cover}
+                flat
               />
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -290,6 +294,16 @@ export function BookInfoSheet({
             ))}
           </div>
         </div>
+
+        <Field label="คำโปรย" hint="ประโยคเด็ดที่แสดงบนหน้าหนังสือ">
+          <textarea
+            value={info.blurb ?? ""}
+            onChange={(e) => patch({ blurb: e.target.value })}
+            rows={2}
+            placeholder="ประโยคสั้น ๆ ที่ทำให้คนอยากเปิดอ่าน"
+            className={cn(inputClass, "resize-y leading-relaxed")}
+          />
+        </Field>
 
         <Field label="เรื่องย่อ">
           <textarea

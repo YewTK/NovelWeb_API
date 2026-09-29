@@ -27,19 +27,20 @@ interface StreamFailure {
   quota?: "minute" | "day";
 }
 
-function isAbort(e: unknown): boolean {
+export function isAbort(e: unknown): boolean {
   return (e as { name?: string })?.name === "AbortError";
 }
 
-/** One request to /api/translate. Resolves with the failure, if any, instead of throwing. */
+/** One request to an SSE route. Resolves with the failure, if any, instead of throwing. */
 async function streamSse(
+  endpoint: string,
   body: unknown,
   signal: AbortSignal,
   onDelta: (text: string) => void,
 ): Promise<StreamFailure | null> {
   let res: Response;
   try {
-    res = await fetch("/api/translate", {
+    res = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -118,7 +119,9 @@ const MAX_SERVER_RETRIES = 6;
  * rate limits, exhausted keys and provider hiccups. `onReset` fires when a
  * half-streamed attempt is thrown away so the caller can clear partial text.
  */
-async function callWithRetry(opts: {
+export async function callWithRetry(opts: {
+  /** SSE route to call; the translator's by default */
+  endpoint?: string;
   ring: KeyRing;
   body: Record<string, unknown>;
   signal: AbortSignal;
@@ -140,6 +143,7 @@ async function callWithRetry(opts: {
     let failure: StreamFailure | null;
     try {
       failure = await streamSse(
+        opts.endpoint ?? "/api/translate",
         { ...opts.body, config: { ...ring.config, apiKey: lease.key } },
         signal,
         (text) => {
@@ -188,7 +192,7 @@ async function callWithRetry(opts: {
 }
 
 /** Turns a key-pool or abort failure into the message the UI shows. */
-function messageOf(e: unknown): string {
+export function messageOf(e: unknown): string {
   if (e instanceof NoKeyAvailableError) return e.message;
   if (e instanceof Error) return e.message;
   return "เกิดข้อผิดพลาดที่ไม่รู้จัก";
